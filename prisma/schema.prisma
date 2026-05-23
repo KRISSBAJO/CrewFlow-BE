@@ -172,19 +172,21 @@ enum JobReportStatus {
 }
 
 model Tenant {
-  id                   String                @id @default(cuid())
+  id                   String                  @id @default(cuid())
   businessName         String
-  slug                 String                @unique
+  slug                 String                  @unique
   industry             String
-  status               TenantStatus          @default(TRIAL)
-  subscriptionPlan     String                @default("pilot")
+  status               TenantStatus            @default(TRIAL)
+  subscriptionPlan     String                  @default("pilot")
   billingEmail         String?
   monthlyPriceCents    Int?
   setupFeeCents        Int?
+  featureFlags         Json?
+  planLimits           Json?
   suspendedAt          DateTime?
-  invoiceCounter       Int                   @default(0)
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
+  invoiceCounter       Int                     @default(0)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
   users                User[]
   customers            Customer[]
   services             Service[]
@@ -205,6 +207,8 @@ model Tenant {
   bookingIntents       BookingIntent[]
   leads                Lead[]
   auditLogs            AuditLog[]
+  supportNotes         PlatformSupportNote[]
+  supportAccessLogs    PlatformSupportAccess[]
   onboardingProfile    OnboardingProfile?
 }
 
@@ -226,25 +230,27 @@ model OnboardingProfile {
 }
 
 model User {
-  id                     String              @id @default(cuid())
+  id                     String                  @id @default(cuid())
   tenantId               String
   name                   String
   email                  String
   passwordHash           String
-  role                   UserRole            @default(STAFF)
+  role                   UserRole                @default(STAFF)
   phone                  String?
-  active                 Boolean             @default(true)
-  createdAt              DateTime            @default(now())
-  updatedAt              DateTime            @updatedAt
-  tenant                 Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  bookings               Booking[]           @relation("AssignedStaff")
+  active                 Boolean                 @default(true)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bookings               Booking[]               @relation("AssignedStaff")
   attendance             Attendance[]
-  assignedActions        OperationalAction[] @relation("ActionAssignee")
-  assignedConversations  Conversation[]      @relation("ConversationAssignee")
-  completedJobReports    FieldJobReport[]    @relation("JobReportCompletedBy")
-  assignedLeads          Lead[]              @relation("LeadAssignee")
+  assignedActions        OperationalAction[]     @relation("ActionAssignee")
+  assignedConversations  Conversation[]          @relation("ConversationAssignee")
+  completedJobReports    FieldJobReport[]        @relation("JobReportCompletedBy")
+  assignedLeads          Lead[]                  @relation("LeadAssignee")
   auditLogs              AuditLog[]
-  handedOffConversations Conversation[]      @relation("ConversationHandoff")
+  handedOffConversations Conversation[]          @relation("ConversationHandoff")
+  platformSupportNotes   PlatformSupportNote[]   @relation("PlatformSupportNoteAuthor")
+  platformSupportAccess  PlatformSupportAccess[] @relation("PlatformSupportAccessAdmin")
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
@@ -673,4 +679,33 @@ model AuditLog {
   @@index([tenantId, createdAt])
   @@index([tenantId, entityType, entityId])
   @@index([tenantId, actorId])
+}
+
+model PlatformSupportNote {
+  id        String   @id @default(cuid())
+  tenantId  String
+  authorId  String?
+  note      String
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  author    User?    @relation("PlatformSupportNoteAuthor", fields: [authorId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([authorId])
+}
+
+model PlatformSupportAccess {
+  id        String    @id @default(cuid())
+  tenantId  String
+  adminId   String
+  reason    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  admin     User      @relation("PlatformSupportAccessAdmin", fields: [adminId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([adminId, createdAt])
 }

@@ -64,6 +64,17 @@ async function main() {
       billingEmail: 'owner@sparkle.test',
       monthlyPriceCents: 29900,
       setupFeeCents: 100000,
+      featureFlags: {
+        aiReceptionist: true,
+        leadPipeline: true,
+        retention: true,
+        whatsappAutomation: true,
+      },
+      planLimits: {
+        staff: 25,
+        monthlyBookings: 500,
+        monthlyMessages: 5000,
+      },
     },
     create: {
       businessName: 'Sparkle Home Services',
@@ -74,6 +85,17 @@ async function main() {
       billingEmail: 'owner@sparkle.test',
       monthlyPriceCents: 29900,
       setupFeeCents: 100000,
+      featureFlags: {
+        aiReceptionist: true,
+        leadPipeline: true,
+        retention: true,
+        whatsappAutomation: true,
+      },
+      planLimits: {
+        staff: 25,
+        monthlyBookings: 500,
+        monthlyMessages: 5000,
+      },
     },
   });
 
