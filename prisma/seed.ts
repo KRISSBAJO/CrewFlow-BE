@@ -22,14 +22,58 @@ const prisma = new PrismaClient();
 async function main() {
   const passwordHash = await bcrypt.hash('Password123!', 12);
 
+  const platformTenant = await prisma.tenant.upsert({
+    where: { slug: 'crewflow-platform' },
+    update: {
+      status: 'ACTIVE',
+      subscriptionPlan: 'platform',
+    },
+    create: {
+      businessName: 'CrewFlow Platform',
+      slug: 'crewflow-platform',
+      industry: 'SaaS Operations',
+      status: 'ACTIVE',
+      subscriptionPlan: 'platform',
+    },
+  });
+
+  await prisma.user.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: platformTenant.id,
+        email: 'admin@crewflow.test',
+      },
+    },
+    update: {
+      role: UserRole.PLATFORM_ADMIN,
+      active: true,
+    },
+    create: {
+      tenantId: platformTenant.id,
+      name: 'CrewFlow Admin',
+      email: 'admin@crewflow.test',
+      passwordHash,
+      role: UserRole.PLATFORM_ADMIN,
+    },
+  });
+
   const tenant = await prisma.tenant.upsert({
     where: { slug: 'sparkle-home-services' },
-    update: {},
+    update: {
+      status: 'ACTIVE',
+      billingEmail: 'owner@sparkle.test',
+      monthlyPriceCents: 29900,
+      setupFeeCents: 100000,
+    },
     create: {
       businessName: 'Sparkle Home Services',
       slug: 'sparkle-home-services',
       industry: 'Cleaning + Home Services',
+      status: 'ACTIVE',
       subscriptionPlan: 'pilot',
+      billingEmail: 'owner@sparkle.test',
+      monthlyPriceCents: 29900,
+      setupFeeCents: 100000,
     },
   });
 
@@ -607,6 +651,7 @@ async function main() {
 
   console.log('Seeded CrewFlow demo tenant');
   console.log('Login: owner@sparkle.test / Password123!');
+  console.log('Platform admin: admin@crewflow.test / Password123!');
   console.log(`Tenant: ${tenant.businessName} (${tenant.id})`);
   console.log(`Owner: ${owner.name}`);
   console.log(`Manager: ${manager.email}`);

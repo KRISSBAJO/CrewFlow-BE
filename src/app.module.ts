@@ -17,6 +17,7 @@ import { InboxModule } from './inbox/inbox.module';
 import { LeadsModule } from './leads/leads.module';
 import { MessagesModule } from './messages/messages.module';
 import { PaymentsModule } from './payments/payments.module';
+import { PlatformModule } from './platform/platform.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ReceptionistModule } from './receptionist/receptionist.module';
 import { RetentionModule } from './retention/retention.module';
@@ -46,6 +47,7 @@ import { WorkflowsModule } from './workflows/workflows.module';
     InboxModule,
     LeadsModule,
     PaymentsModule,
+    PlatformModule,
     MessagesModule,
     AutomationsModule,
     DashboardModule,

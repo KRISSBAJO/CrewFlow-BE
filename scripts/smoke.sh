@@ -4,6 +4,8 @@ set -euo pipefail
 API_URL="${API_URL:-http://localhost:3002/api}"
 EMAIL="${DEMO_EMAIL:-owner@sparkle.test}"
 PASSWORD="${DEMO_PASSWORD:-Password123!}"
+ADMIN_EMAIL="${PLATFORM_ADMIN_EMAIL:-admin@crewflow.test}"
+ADMIN_PASSWORD="${PLATFORM_ADMIN_PASSWORD:-Password123!}"
 
 echo "CrewFlow smoke test"
 echo "API: $API_URL"
@@ -72,5 +74,17 @@ actions="$(
     -H "Authorization: Bearer $token"
 )"
 echo "actions: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.length} open actions`)' "$actions")"
+
+admin_token="$(
+  curl -fsS -X POST "$API_URL/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" |
+    node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => process.stdout.write(JSON.parse(s).accessToken));'
+)"
+platform="$(
+  curl -fsS "$API_URL/platform/metrics" \
+    -H "Authorization: Bearer $admin_token"
+)"
+echo "platform: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.activeUsers} users, ${j.bookings} bookings, failures=${j.failedAutomations + j.failedWebhooks}`)' "$platform")"
 
 echo "smoke: passed"

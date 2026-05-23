@@ -42,6 +42,7 @@ export class AuthService {
           businessName: dto.businessName.trim(),
           slug,
           industry: dto.industry.trim(),
+          status: 'TRIAL',
           onboardingProfile: {
             create: {
               ownerName: dto.ownerName.trim(),
@@ -123,6 +124,7 @@ export class AuthService {
         businessName: tenant.businessName,
         slug: tenant.slug,
         industry: tenant.industry,
+        status: tenant.status,
       },
       onboardingProfile: tenant.onboardingProfile,
     });
@@ -144,6 +146,7 @@ export class AuthService {
         businessName: user.tenant.businessName,
         slug: user.tenant.slug,
         industry: user.tenant.industry,
+        status: user.tenant.status,
       },
     });
   }

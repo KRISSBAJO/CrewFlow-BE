@@ -41,6 +41,7 @@ Demo login:
 owner@sparkle.test / Password123!
 manager@sparkle.test / Password123!
 crew@sparkle.test / Password123!
+admin@crewflow.test / Password123! (platform admin)
 ```
 
 ## Local Without Docker Desktop
@@ -163,6 +164,10 @@ The smoke test checks health, login, dashboard, booking creation, receptionist i
 - `GET /api/leads`
 - `GET /api/leads/analytics`
 - `GET /api/retention`
+- `GET /api/platform/metrics`
+- `GET /api/platform/tenants`
+- `PATCH /api/platform/tenants/:id`
+- `GET /api/platform/audit`
 - `POST /api/inbox/:id/booking-intents/:intentId/book`
 - `POST /api/receptionist/inquiry`
 - `POST /api/workflows/scan-lead-follow-ups`

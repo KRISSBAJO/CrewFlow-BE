@@ -8,9 +8,17 @@ datasource db {
 }
 
 enum UserRole {
+  PLATFORM_ADMIN
   OWNER
   MANAGER
   STAFF
+}
+
+enum TenantStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  CHURNED
 }
 
 enum BookingStatus {
@@ -168,7 +176,12 @@ model Tenant {
   businessName         String
   slug                 String                @unique
   industry             String
+  status               TenantStatus          @default(TRIAL)
   subscriptionPlan     String                @default("pilot")
+  billingEmail         String?
+  monthlyPriceCents    Int?
+  setupFeeCents        Int?
+  suspendedAt          DateTime?
   invoiceCounter       Int                   @default(0)
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
