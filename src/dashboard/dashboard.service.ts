@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common';
 import {
   ActionPriority,
   ActionStatus,
+  BookingIntentStatus,
   BookingStatus,
+  ConversationStatus,
   InvoiceStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -29,6 +31,9 @@ export class DashboardService {
       unassignedToday,
       pendingRequests,
       noShows,
+      hotLeads,
+      staleConversations,
+      completedUnpaid,
     ] = await Promise.all([
       this.prisma.booking.findMany({
         where: { tenantId, startTime: { gte: start, lte: end } },
@@ -106,6 +111,33 @@ export class DashboardService {
         include: { service: true, customer: true },
         take: 20,
       }),
+      this.prisma.bookingIntent.count({
+        where: {
+          tenantId,
+          status: { in: [BookingIntentStatus.READY, BookingIntentStatus.COLLECTING] },
+          bookingId: null,
+        },
+      }),
+      this.prisma.conversation.count({
+        where: {
+          tenantId,
+          status: {
+            in: [
+              ConversationStatus.OPEN,
+              ConversationStatus.WAITING_ON_CUSTOMER,
+              ConversationStatus.BOOKING_READY,
+            ],
+          },
+          lastMessageAt: { lt: this.hoursAgo(4) },
+        },
+      }),
+      this.prisma.booking.count({
+        where: {
+          tenantId,
+          status: BookingStatus.COMPLETED,
+          OR: [{ invoice: null }, { invoice: { status: { not: InvoiceStatus.PAID } } }],
+        },
+      }),
     ]);
 
     const noShowRiskCents = noShows.reduce(
@@ -144,6 +176,9 @@ export class DashboardService {
           unassignedToday,
           pendingRequests,
           urgentActionCount: urgentActions.length,
+          hotLeads,
+          staleConversations,
+          completedUnpaid,
         }),
       },
     };
@@ -156,6 +191,9 @@ export class DashboardService {
     unassignedToday: number;
     pendingRequests: number;
     urgentActionCount: number;
+    hotLeads: number;
+    staleConversations: number;
+    completedUnpaid: number;
   }) {
     const alerts: Array<{
       key: string;
@@ -190,6 +228,30 @@ export class DashboardService {
         value: input.pendingRequests,
       });
     }
+    if (input.hotLeads > 0) {
+      alerts.push({
+        key: 'hot-leads',
+        severity: 'critical',
+        title: 'Receptionist leads are not booked yet',
+        value: input.hotLeads,
+      });
+    }
+    if (input.completedUnpaid > 0) {
+      alerts.push({
+        key: 'completed-unpaid',
+        severity: 'critical',
+        title: 'Completed jobs still need payment',
+        value: input.completedUnpaid,
+      });
+    }
+    if (input.staleConversations > 0) {
+      alerts.push({
+        key: 'stale-conversations',
+        severity: 'warning',
+        title: 'Customer conversations need follow-up',
+        value: input.staleConversations,
+      });
+    }
     if (input.noShowRiskCents > 0) {
       alerts.push({
         key: 'no-show-risk',
@@ -216,5 +278,11 @@ export class DashboardService {
     }
 
     return alerts;
+  }
+
+  private hoursAgo(hours: number) {
+    const date = new Date();
+    date.setHours(date.getHours() - hours);
+    return date;
   }
 }

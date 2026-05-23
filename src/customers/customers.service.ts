@@ -184,7 +184,30 @@ export class CustomersService {
       })),
     ].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
 
-    return { customerId: id, items };
+    const now = new Date();
+    const paidTotalCents = invoices
+      .filter((invoice) => invoice.status === 'PAID')
+      .reduce((sum, invoice) => sum + invoice.totalCents, 0);
+    const openInvoiceCents = invoices
+      .filter((invoice) => ['SENT', 'OVERDUE'].includes(invoice.status))
+      .reduce((sum, invoice) => sum + invoice.totalCents, 0);
+    const lastBooking = bookings.find((booking) => booking.startTime <= now);
+    const nextBooking = [...bookings]
+      .filter((booking) => booking.startTime > now)
+      .sort((a, b) => a.startTime.getTime() - b.startTime.getTime())[0];
+
+    return {
+      customerId: id,
+      summary: {
+        paidTotalCents,
+        openInvoiceCents,
+        bookingCount: bookings.length,
+        invoiceCount: invoices.length,
+        lastBooking,
+        nextBooking,
+      },
+      items,
+    };
   }
 
   update(tenantId: string, id: string, dto: UpdateCustomerDto) {
