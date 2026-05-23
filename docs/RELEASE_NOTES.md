@@ -1,0 +1,49 @@
+# CrewFlow Backend Release Notes
+
+## Launch Checkpoint
+
+This checkpoint covers the CrewFlow backend through the operational money-engine build.
+
+### Included
+
+- Tenant-aware auth and onboarding
+- Staff, customer, service, and booking management
+- Inline customer booking creation
+- Recurring booking support
+- Staff conflict checks
+- Field job start, notes, checklist, completion, and reports
+- Invoice creation from completed work
+- Payment link and mock checkout flow
+- Revenue-risk dashboard
+- Manager action queue
+- AI receptionist intake
+- Inbox booking-intent conversion
+- WhatsApp readiness and webhook event monitor
+- Automation delivery runs and retry support
+- Swagger/OpenAPI docs
+- Demo seed data
+- Launch checklist, demo script, and smoke script
+
+### Demo Login
+
+```text
+owner@sparkle.test / Password123!
+manager@sparkle.test / Password123!
+crew@sparkle.test / Password123!
+```
+
+### Verification
+
+```bash
+yarn build
+yarn seed
+./scripts/smoke.sh
+```
+
+### Important Production Notes
+
+- Set a strong `JWT_SECRET`.
+- Do not run demo seed against production data.
+- Set `WHATSAPP_APP_SECRET` to enforce WhatsApp webhook signatures.
+- Set `STRIPE_WEBHOOK_SECRET` to enforce Stripe webhook signatures.
+- Use `/api/health` and `scripts/smoke.sh` after deployment.
