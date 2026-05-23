@@ -14,10 +14,12 @@ import {
   MessageProvider,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
+import { BookingsService } from '../bookings/bookings.service';
 import { AuthUser } from '../common/current-user.decorator';
 import { assertManager } from '../common/permissions';
 import { MessageProviderService } from '../messaging/message-provider.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { BookBookingIntentDto } from './dto/book-booking-intent.dto';
 import { CreateActionFromConversationDto } from './dto/create-action-from-conversation.dto';
 import { CreateBookingIntentFromConversationDto } from './dto/create-booking-intent-from-conversation.dto';
 import { ReplyConversationDto } from './dto/reply-conversation.dto';
@@ -31,6 +33,7 @@ export class InboxService {
     private readonly provider: MessageProviderService,
     private readonly ai: InboxAiService,
     private readonly audit: AuditService,
+    private readonly bookings: BookingsService,
   ) {}
 
   findAll(
@@ -331,6 +334,98 @@ export class InboxService {
     });
 
     return intent;
+  }
+
+  async bookIntent(
+    user: AuthUser,
+    conversationId: string,
+    intentId: string,
+    dto: BookBookingIntentDto,
+  ) {
+    assertManager(user);
+    const intent = await this.prisma.bookingIntent.findFirst({
+      where: { id: intentId, conversationId, tenantId: user.tenantId },
+      include: { conversation: { include: { customer: true } }, service: true },
+    });
+    if (!intent) {
+      throw new NotFoundException('Booking intent not found');
+    }
+    if (intent.bookingId) {
+      throw new BadRequestException('Booking intent has already been booked');
+    }
+    if (!intent.customerId || !intent.conversation.customer) {
+      throw new BadRequestException('Booking intent needs a customer');
+    }
+    if (!intent.serviceId) {
+      throw new BadRequestException('Booking intent needs a service');
+    }
+
+    const booking = await this.bookings.create(user, {
+      customerId: intent.customerId,
+      serviceId: intent.serviceId,
+      assignedStaffId: dto.assignedStaffId,
+      startTime: dto.startTime,
+      status: dto.status,
+      source: `inbox:${intent.conversation.channel.toLowerCase()}`,
+      notes:
+        dto.notes ??
+        [
+          intent.notes,
+          intent.address ? `Address: ${intent.address}` : null,
+          intent.preferredWindow
+            ? `Preferred window: ${intent.preferredWindow}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+    });
+
+    const [updatedIntent, conversation] = await this.prisma.$transaction([
+      this.prisma.bookingIntent.update({
+        where: { id: intent.id },
+        data: {
+          bookingId: booking.id,
+          status: BookingIntentStatus.BOOKED,
+          requestedDate: new Date(dto.startTime),
+          missingFields: [],
+        },
+        include: { service: true, customer: true, booking: true },
+      }),
+      this.prisma.conversation.update({
+        where: { id: conversationId },
+        data: {
+          status: ConversationStatus.RESOLVED,
+          resolvedAt: new Date(),
+          assignedToId: intent.conversation.assignedToId ?? user.sub,
+        },
+        include: { customer: true },
+      }),
+      this.prisma.conversationMessage.create({
+        data: {
+          tenantId: user.tenantId,
+          conversationId,
+          role: ConversationMessageRole.SYSTEM,
+          content: `Booking created for ${booking.customer.name}: ${booking.service.title} on ${booking.startTime.toISOString()}.`,
+          metadata: { bookingId: booking.id, bookingIntentId: intent.id },
+        },
+      }),
+    ]);
+
+    await this.audit.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'INBOX_BOOKING_INTENT_BOOKED',
+      entityType: 'BookingIntent',
+      entityId: intent.id,
+      summary: `Booked receptionist intent for ${booking.customer.name}`,
+      metadata: {
+        conversationId,
+        bookingId: booking.id,
+        serviceId: intent.serviceId,
+      },
+    });
+
+    return { booking, bookingIntent: updatedIntent, conversation };
   }
 
   private async assertConversation(tenantId: string, id: string) {

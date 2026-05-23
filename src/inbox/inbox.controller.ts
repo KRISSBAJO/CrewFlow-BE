@@ -11,6 +11,7 @@ import { ConversationStatus, MessageProvider, UserRole } from '@prisma/client';
 import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
 import { Roles } from '../common/roles.decorator';
+import { BookBookingIntentDto } from './dto/book-booking-intent.dto';
 import { CreateActionFromConversationDto } from './dto/create-action-from-conversation.dto';
 import { CreateBookingIntentFromConversationDto } from './dto/create-booking-intent-from-conversation.dto';
 import { ReplyConversationDto } from './dto/reply-conversation.dto';
@@ -76,5 +77,15 @@ export class InboxController {
     @Body() dto: CreateBookingIntentFromConversationDto,
   ) {
     return this.inbox.createBookingIntent(user, id, dto);
+  }
+
+  @Post(':id/booking-intents/:intentId/book')
+  bookIntent(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('intentId') intentId: string,
+    @Body() dto: BookBookingIntentDto,
+  ) {
+    return this.inbox.bookIntent(user, id, intentId, dto);
   }
 }
