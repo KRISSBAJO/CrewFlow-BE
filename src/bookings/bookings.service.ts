@@ -10,6 +10,7 @@ import { AutomationsService } from '../automations/automations.service';
 import { addMinutes } from '../common/domain';
 import { AuthUser } from '../common/current-user.decorator';
 import { assertManager, isManager } from '../common/permissions';
+import { PlanLimitsService } from '../common/plan-limits.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkflowsService } from '../workflows/workflows.service';
@@ -50,17 +51,39 @@ export class BookingsService {
     private readonly automations: AutomationsService,
     private readonly workflows: WorkflowsService,
     private readonly invoices: InvoicesService,
+    private readonly planLimits: PlanLimitsService,
   ) {}
 
   async create(user: AuthUser, dto: CreateBookingDto) {
     assertManager(user);
     const tenantId = user.tenantId;
+    await this.planLimits.assertCanWrite(tenantId);
     const customerId = await this.resolveCustomerId(tenantId, dto);
     const service = await this.prisma.service.findFirstOrThrow({
       where: { id: dto.serviceId, tenantId, active: true },
     });
     const assignedStaffId = dto.assignedStaffId;
     const startTimes = this.buildRepeatStartTimes(dto);
+    const monthlyLimit = await this.planLimits.limitFor(
+      tenantId,
+      'monthlyBookings',
+    );
+    if (typeof monthlyLimit === 'number') {
+      const monthStart = new Date(startTimes[0]);
+      monthStart.setDate(1);
+      monthStart.setHours(0, 0, 0, 0);
+      const monthEnd = new Date(monthStart);
+      monthEnd.setMonth(monthEnd.getMonth() + 1);
+      const monthlyBookings = await this.prisma.booking.count({
+        where: {
+          tenantId,
+          startTime: { gte: monthStart, lt: monthEnd },
+        },
+      });
+      if (monthlyBookings + startTimes.length > monthlyLimit) {
+        throw new BadRequestException('Monthly booking plan limit reached');
+      }
+    }
 
     if (assignedStaffId) {
       await this.assertStaff(tenantId, assignedStaffId);

@@ -57,6 +57,12 @@ whatsapp="$(
 )"
 echo "whatsapp: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.provider.mode} ready=${j.provider.ready}`)' "$whatsapp")"
 
+tenant_billing="$(
+  curl -fsS "$API_URL/tenant/billing" \
+    -H "Authorization: Bearer $token"
+)"
+echo "tenant billing: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.subscriptionStatus} plan=${j.subscriptionPlan} staff=${j.usage.staff}/${j.limits.staff ?? "∞"}`)' "$tenant_billing")"
+
 leads="$(
   curl -fsS "$API_URL/leads/analytics" \
     -H "Authorization: Bearer $token"

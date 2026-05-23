@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
+import { PlanLimitsService } from '../common/plan-limits.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
@@ -7,7 +8,7 @@ import { LeadsService } from './leads.service';
 @Module({
   imports: [PrismaModule, AuditModule],
   controllers: [LeadsController],
-  providers: [LeadsService],
+  providers: [LeadsService, PlanLimitsService],
   exports: [LeadsService],
 })
 export class LeadsModule {}

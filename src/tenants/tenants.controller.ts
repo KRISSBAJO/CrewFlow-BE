@@ -31,6 +31,23 @@ export class TenantsController {
     return this.tenants.getOnboarding(user.tenantId);
   }
 
+  @Get('billing')
+  billing(@CurrentUser() user: AuthUser) {
+    return this.tenants.billing(user);
+  }
+
+  @Roles(UserRole.OWNER)
+  @Post('billing/checkout')
+  createBillingCheckout(@CurrentUser() user: AuthUser) {
+    return this.tenants.createBillingCheckout(user);
+  }
+
+  @Roles(UserRole.OWNER)
+  @Post('billing/portal')
+  createBillingPortal(@CurrentUser() user: AuthUser) {
+    return this.tenants.createBillingPortal(user);
+  }
+
   @Get('staff')
   listStaff(@CurrentUser() user: AuthUser) {
     return this.tenants.listStaff(user.tenantId);

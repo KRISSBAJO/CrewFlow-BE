@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { PlanLimitsService } from '../common/plan-limits.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { ImportCustomerRowDto } from './dto/import-customers.dto';
@@ -6,13 +7,27 @@ import { UpdateCustomerDto } from './dto/update-customer.dto';
 
 @Injectable()
 export class CustomersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly planLimits: PlanLimitsService,
+  ) {}
 
-  create(tenantId: string, dto: CreateCustomerDto) {
+  async create(tenantId: string, dto: CreateCustomerDto) {
+    await this.planLimits.assertCanWrite(tenantId);
+    await this.planLimits.assertBelowLimit(
+      tenantId,
+      'customers',
+      await this.prisma.customer.count({ where: { tenantId } }),
+    );
     return this.prisma.customer.create({ data: { ...dto, tenantId } });
   }
 
   async import(tenantId: string, customers: ImportCustomerRowDto[]) {
+    await this.planLimits.assertCanWrite(tenantId);
+    const customerLimit = await this.planLimits.limitFor(tenantId, 'customers');
+    const existingCustomers = await this.prisma.customer.count({
+      where: { tenantId },
+    });
     const rows = customers
       .map((customer) => ({
         name: customer.name.trim(),
@@ -21,7 +36,7 @@ export class CustomersService {
         notes: customer.notes?.trim() || undefined,
       }))
       .filter((customer) => customer.name && customer.phone)
-      .slice(0, 500);
+      .slice(0, Math.min(500, Math.max(0, (customerLimit ?? 500) - existingCustomers)));
 
     let created = 0;
     let updated = 0;

@@ -1,6 +1,9 @@
-import { ConflictException, Injectable } from '@nestjs/common';
-import { Prisma, UserRole } from '@prisma/client';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { BillingEventType, Prisma, SubscriptionStatus, Tenant, TenantStatus, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { AuditService } from '../audit/audit.service';
+import { AuthUser } from '../common/current-user.decorator';
+import { PlanLimitsService } from '../common/plan-limits.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateTenantSettingsDto } from './dto/update-tenant-settings.dto';
@@ -8,7 +11,11 @@ import { UpdateStaffDto } from './dto/update-staff.dto';
 
 @Injectable()
 export class TenantsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly planLimits: PlanLimitsService,
+  ) {}
 
   getProfile(tenantId: string) {
     return this.prisma.tenant.findUniqueOrThrow({
@@ -19,6 +26,16 @@ export class TenantsService {
         slug: true,
         industry: true,
         subscriptionPlan: true,
+        subscriptionStatus: true,
+        billingEmail: true,
+        monthlyPriceCents: true,
+        setupFeeCents: true,
+        currentPeriodEnd: true,
+        nextBillingAt: true,
+        pastDueAt: true,
+        canceledAt: true,
+        featureFlags: true,
+        planLimits: true,
         createdAt: true,
         onboardingProfile: true,
         receptionistConfig: {
@@ -149,6 +166,12 @@ export class TenantsService {
   }
 
   async createStaff(tenantId: string, dto: CreateStaffDto) {
+    await this.planLimits.assertCanWrite(tenantId);
+    await this.planLimits.assertBelowLimit(
+      tenantId,
+      'staff',
+      await this.prisma.user.count({ where: { tenantId, active: true } }),
+    );
     const existing = await this.prisma.user.findUnique({
       where: { tenantId_email: { tenantId, email: dto.email.toLowerCase() } },
     });
@@ -176,6 +199,198 @@ export class TenantsService {
         active: true,
       },
     });
+  }
+
+  async billing(user: AuthUser) {
+    const [tenant, counts, events] = await Promise.all([
+      this.prisma.tenant.findUniqueOrThrow({ where: { id: user.tenantId } }),
+      this.usageCounts(user.tenantId),
+      this.prisma.platformBillingEvent.findMany({
+        where: { tenantId: user.tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+      }),
+    ]);
+    const limits = this.planLimits.asLimits(tenant.planLimits);
+    return {
+      tenantId: tenant.id,
+      subscriptionPlan: tenant.subscriptionPlan,
+      subscriptionStatus: tenant.subscriptionStatus,
+      monthlyPriceCents: tenant.monthlyPriceCents,
+      setupFeeCents: tenant.setupFeeCents,
+      billingEmail: tenant.billingEmail,
+      currentPeriodEnd: tenant.currentPeriodEnd,
+      nextBillingAt: tenant.nextBillingAt,
+      pastDueAt: tenant.pastDueAt,
+      canceledAt: tenant.canceledAt,
+      stripeConfigured: Boolean(process.env.STRIPE_SECRET_KEY),
+      hasStripeCustomer: Boolean(tenant.stripeCustomerId),
+      limits,
+      usage: counts,
+      events,
+    };
+  }
+
+  async createBillingCheckout(user: AuthUser) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: user.tenantId },
+    });
+    const monthlyPriceCents = tenant.monthlyPriceCents ?? 29900;
+    if (monthlyPriceCents <= 0) {
+      throw new BadRequestException('Monthly price must be configured first');
+    }
+    const checkout = process.env.STRIPE_SECRET_KEY
+      ? await this.createStripeSubscriptionCheckout(tenant, monthlyPriceCents)
+      : this.createMockSubscriptionCheckout(tenant.id);
+
+    await this.prisma.platformBillingEvent.create({
+      data: {
+        tenantId: tenant.id,
+        actorId: user.sub,
+        type: BillingEventType.SETUP_FEE_INVOICED,
+        amountCents: monthlyPriceCents,
+        provider: checkout.provider,
+        providerEventId: checkout.sessionId,
+        note: 'Tenant owner created subscription checkout.',
+        metadata: {
+          checkoutUrl: checkout.url,
+          monthlyPriceCents,
+        },
+      },
+    });
+    await this.audit.record({
+      tenantId: tenant.id,
+      actorId: user.sub,
+      action: 'TENANT_BILLING_CHECKOUT_CREATED',
+      entityType: 'Tenant',
+      entityId: tenant.id,
+      summary: 'Owner created a billing checkout session',
+      metadata: { provider: checkout.provider, checkoutUrl: checkout.url },
+    });
+    return checkout;
+  }
+
+  async createBillingPortal(user: AuthUser) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: user.tenantId },
+    });
+    if (!tenant.stripeCustomerId) {
+      throw new BadRequestException('No billing customer is linked yet');
+    }
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (!secret) {
+      throw new BadRequestException('Stripe billing portal is not configured');
+    }
+    const apiBase = process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api';
+    const params = new URLSearchParams();
+    params.set('customer', tenant.stripeCustomerId);
+    params.set(
+      'return_url',
+      process.env.TENANT_BILLING_PORTAL_RETURN_URL ??
+        `${apiBase.replace('/api', '')}/app?view=settings`,
+    );
+
+    const response = await fetch(
+      'https://api.stripe.com/v1/billing_portal/sessions',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: params,
+      },
+    );
+    if (!response.ok) {
+      throw new BadRequestException(await response.text());
+    }
+    const session = (await response.json()) as { id: string; url?: string };
+    return { provider: 'stripe', sessionId: session.id, url: session.url };
+  }
+
+  private async usageCounts(tenantId: string) {
+    const now = new Date();
+    const monthStart = new Date(now);
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthEnd = new Date(monthStart);
+    monthEnd.setMonth(monthEnd.getMonth() + 1);
+    const [staff, customers, leads, monthlyBookings] = await Promise.all([
+      this.prisma.user.count({ where: { tenantId, active: true } }),
+      this.prisma.customer.count({ where: { tenantId } }),
+      this.prisma.lead.count({ where: { tenantId } }),
+      this.prisma.booking.count({
+        where: { tenantId, startTime: { gte: monthStart, lt: monthEnd } },
+      }),
+    ]);
+    return { staff, customers, leads, monthlyBookings };
+  }
+
+  private async createStripeSubscriptionCheckout(
+    tenant: Tenant,
+    monthlyPriceCents: number,
+  ) {
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (!secret) {
+      throw new BadRequestException('STRIPE_SECRET_KEY is not configured');
+    }
+    const apiBase = process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api';
+    const successUrl =
+      process.env.TENANT_BILLING_SUCCESS_URL ??
+      `${apiBase.replace('/api', '')}/app?billing=success`;
+    const cancelUrl =
+      process.env.TENANT_BILLING_CANCEL_URL ??
+      `${apiBase.replace('/api', '')}/app?billing=cancel`;
+    const params = new URLSearchParams();
+    params.set('mode', 'subscription');
+    params.set('success_url', successUrl);
+    params.set('cancel_url', cancelUrl);
+    params.set('client_reference_id', tenant.id);
+    if (tenant.stripeCustomerId) {
+      params.set('customer', tenant.stripeCustomerId);
+    } else if (tenant.billingEmail) {
+      params.set('customer_email', tenant.billingEmail);
+    }
+    params.set('metadata[kind]', 'platform_subscription');
+    params.set('metadata[tenantId]', tenant.id);
+    params.set('metadata[monthlyPriceCents]', monthlyPriceCents.toString());
+    params.set('metadata[setupFeeCents]', '0');
+    params.set('subscription_data[metadata][kind]', 'platform_subscription');
+    params.set('subscription_data[metadata][tenantId]', tenant.id);
+    params.set('line_items[0][quantity]', '1');
+    params.set('line_items[0][price_data][currency]', 'usd');
+    params.set('line_items[0][price_data][unit_amount]', monthlyPriceCents.toString());
+    params.set('line_items[0][price_data][recurring][interval]', 'month');
+    params.set(
+      'line_items[0][price_data][product_data][name]',
+      `${tenant.businessName} CrewFlow subscription`,
+    );
+    const response = await fetch(
+      'https://api.stripe.com/v1/checkout/sessions',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: params,
+      },
+    );
+    if (!response.ok) {
+      throw new BadRequestException(await response.text());
+    }
+    const session = (await response.json()) as { id: string; url?: string };
+    return { provider: 'stripe', mock: false, sessionId: session.id, url: session.url };
+  }
+
+  private createMockSubscriptionCheckout(tenantId: string) {
+    const apiBase = process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api';
+    return {
+      provider: 'mock',
+      mock: true,
+      sessionId: `mock_tenant_${tenantId}_${Date.now()}`,
+      url: `${apiBase}/platform/mock-billing/${tenantId}/success`,
+    };
   }
 
   async updateStaff(tenantId: string, id: string, dto: UpdateStaffDto) {

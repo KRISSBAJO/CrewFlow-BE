@@ -9,6 +9,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../common/current-user.decorator';
 import { assertManager } from '../common/permissions';
+import { PlanLimitsService } from '../common/plan-limits.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
@@ -42,6 +43,7 @@ export class LeadsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly planLimits: PlanLimitsService,
   ) {}
 
   findAll(user: AuthUser, status?: LeadStatus, assignedToMe?: boolean) {
@@ -64,6 +66,12 @@ export class LeadsService {
 
   async create(user: AuthUser, dto: CreateLeadDto) {
     assertManager(user);
+    await this.planLimits.assertCanWrite(user.tenantId);
+    await this.planLimits.assertBelowLimit(
+      user.tenantId,
+      'leads',
+      await this.prisma.lead.count({ where: { tenantId: user.tenantId } }),
+    );
     await this.assertReferences(user.tenantId, dto);
     const lead = await this.prisma.lead.create({
       data: {
