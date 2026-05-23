@@ -85,6 +85,17 @@ platform="$(
   curl -fsS "$API_URL/platform/metrics" \
     -H "Authorization: Bearer $admin_token"
 )"
-echo "platform: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.activeUsers} users, ${j.bookings} bookings, failures=${j.failedAutomations + j.failedWebhooks}`)' "$platform")"
+echo "platform: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.activeUsers} users, ${j.bookings} bookings, mrr=${j.mrrCents}, pastDue=${j.pastDueTenants}`)' "$platform")"
+
+tenant_id="$(
+  curl -fsS "$API_URL/platform/tenants" \
+    -H "Authorization: Bearer $admin_token" |
+    node -e 'let s=""; process.stdin.on("data", d => s += d); process.stdin.on("end", () => { const tenants=JSON.parse(s); process.stdout.write(tenants.find((t) => t.slug === "sparkle-home-services")?.id ?? tenants[0]?.id ?? ""); });'
+)"
+billing="$(
+  curl -fsS "$API_URL/platform/tenants/$tenant_id/billing" \
+    -H "Authorization: Bearer $admin_token"
+)"
+echo "billing: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.subscriptionStatus} collected=${j.collectedCents} events=${j.events.length}`)' "$billing")"
 
 echo "smoke: passed"

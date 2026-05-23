@@ -26,6 +26,7 @@ async function main() {
     where: { slug: 'crewflow-platform' },
     update: {
       status: 'ACTIVE',
+      subscriptionStatus: 'ACTIVE',
       subscriptionPlan: 'platform',
     },
     create: {
@@ -33,6 +34,7 @@ async function main() {
       slug: 'crewflow-platform',
       industry: 'SaaS Operations',
       status: 'ACTIVE',
+      subscriptionStatus: 'ACTIVE',
       subscriptionPlan: 'platform',
     },
   });
@@ -61,9 +63,12 @@ async function main() {
     where: { slug: 'sparkle-home-services' },
     update: {
       status: 'ACTIVE',
+      subscriptionStatus: 'ACTIVE',
       billingEmail: 'owner@sparkle.test',
       monthlyPriceCents: 29900,
       setupFeeCents: 100000,
+      currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+      nextBillingAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
       featureFlags: {
         aiReceptionist: true,
         leadPipeline: true,
@@ -81,10 +86,13 @@ async function main() {
       slug: 'sparkle-home-services',
       industry: 'Cleaning + Home Services',
       status: 'ACTIVE',
+      subscriptionStatus: 'ACTIVE',
       subscriptionPlan: 'pilot',
       billingEmail: 'owner@sparkle.test',
       monthlyPriceCents: 29900,
       setupFeeCents: 100000,
+      currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+      nextBillingAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
       featureFlags: {
         aiReceptionist: true,
         leadPipeline: true,
@@ -237,6 +245,30 @@ async function main() {
       fallbackMessage:
         'Thanks for reaching out. I will collect the details and have our team follow up shortly.',
     },
+  });
+
+  await prisma.platformBillingEvent.deleteMany({
+    where: { tenantId: tenant.id },
+  });
+  await prisma.platformBillingEvent.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        actorId: undefined,
+        type: 'SETUP_FEE_PAID',
+        amountCents: 100000,
+        provider: 'manual',
+        note: 'Demo setup fee paid.',
+      },
+      {
+        tenantId: tenant.id,
+        actorId: undefined,
+        type: 'SUBSCRIPTION_STARTED',
+        amountCents: 29900,
+        provider: 'manual',
+        note: 'Demo monthly subscription started.',
+      },
+    ],
   });
 
   const today = new Date();

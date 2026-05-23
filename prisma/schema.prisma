@@ -21,6 +21,25 @@ enum TenantStatus {
   CHURNED
 }
 
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+}
+
+enum BillingEventType {
+  SETUP_FEE_INVOICED
+  SETUP_FEE_PAID
+  SUBSCRIPTION_STARTED
+  SUBSCRIPTION_RENEWED
+  PAYMENT_FAILED
+  PAST_DUE
+  CANCELED
+  CREDIT_APPLIED
+}
+
 enum BookingStatus {
   REQUESTED
   CONFIRMED
@@ -177,10 +196,18 @@ model Tenant {
   slug                 String                  @unique
   industry             String
   status               TenantStatus            @default(TRIAL)
+  subscriptionStatus   SubscriptionStatus      @default(TRIALING)
   subscriptionPlan     String                  @default("pilot")
   billingEmail         String?
   monthlyPriceCents    Int?
   setupFeeCents        Int?
+  trialEndsAt          DateTime?
+  currentPeriodEnd     DateTime?
+  nextBillingAt        DateTime?
+  pastDueAt            DateTime?
+  canceledAt           DateTime?
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
   featureFlags         Json?
   planLimits           Json?
   suspendedAt          DateTime?
@@ -209,6 +236,7 @@ model Tenant {
   auditLogs            AuditLog[]
   supportNotes         PlatformSupportNote[]
   supportAccessLogs    PlatformSupportAccess[]
+  billingEvents        PlatformBillingEvent[]
   onboardingProfile    OnboardingProfile?
 }
 
@@ -251,6 +279,7 @@ model User {
   handedOffConversations Conversation[]          @relation("ConversationHandoff")
   platformSupportNotes   PlatformSupportNote[]   @relation("PlatformSupportNoteAuthor")
   platformSupportAccess  PlatformSupportAccess[] @relation("PlatformSupportAccessAdmin")
+  platformBillingEvents  PlatformBillingEvent[]  @relation("PlatformBillingEventActor")
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
@@ -708,4 +737,24 @@ model PlatformSupportAccess {
 
   @@index([tenantId, createdAt])
   @@index([adminId, createdAt])
+}
+
+model PlatformBillingEvent {
+  id              String           @id @default(cuid())
+  tenantId        String
+  actorId         String?
+  type            BillingEventType
+  amountCents     Int?
+  currency        String           @default("usd")
+  provider        String           @default("manual")
+  providerEventId String?
+  note            String?
+  metadata        Json?
+  createdAt       DateTime         @default(now())
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor           User?            @relation("PlatformBillingEventActor", fields: [actorId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([actorId])
+  @@index([type, createdAt])
 }

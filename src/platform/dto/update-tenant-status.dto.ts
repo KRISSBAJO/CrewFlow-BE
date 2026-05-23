@@ -1,12 +1,17 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { TenantStatus } from '@prisma/client';
-import { IsEnum, IsInt, IsObject, IsOptional, IsString, Min } from 'class-validator';
+import { SubscriptionStatus, TenantStatus } from '@prisma/client';
+import { IsDateString, IsEnum, IsInt, IsObject, IsOptional, IsString, Min } from 'class-validator';
 
 export class UpdateTenantStatusDto {
   @ApiPropertyOptional({ enum: TenantStatus, example: TenantStatus.ACTIVE })
   @IsOptional()
   @IsEnum(TenantStatus)
   status?: TenantStatus;
+
+  @ApiPropertyOptional({ enum: SubscriptionStatus, example: SubscriptionStatus.ACTIVE })
+  @IsOptional()
+  @IsEnum(SubscriptionStatus)
+  subscriptionStatus?: SubscriptionStatus;
 
   @ApiPropertyOptional({ example: 'growth' })
   @IsOptional()
@@ -29,6 +34,31 @@ export class UpdateTenantStatusDto {
   @IsInt()
   @Min(0)
   setupFeeCents?: number;
+
+  @ApiPropertyOptional({ example: '2026-06-23T00:00:00.000Z' })
+  @IsOptional()
+  @IsDateString()
+  trialEndsAt?: string;
+
+  @ApiPropertyOptional({ example: '2026-06-23T00:00:00.000Z' })
+  @IsOptional()
+  @IsDateString()
+  currentPeriodEnd?: string;
+
+  @ApiPropertyOptional({ example: '2026-06-23T00:00:00.000Z' })
+  @IsOptional()
+  @IsDateString()
+  nextBillingAt?: string;
+
+  @ApiPropertyOptional({ example: 'cus_123' })
+  @IsOptional()
+  @IsString()
+  stripeCustomerId?: string;
+
+  @ApiPropertyOptional({ example: 'sub_123' })
+  @IsOptional()
+  @IsString()
+  stripeSubscriptionId?: string;
 
   @ApiPropertyOptional({ example: { aiReceptionist: true, retention: true } })
   @IsOptional()

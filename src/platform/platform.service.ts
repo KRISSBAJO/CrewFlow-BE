@@ -2,10 +2,12 @@ import { Injectable } from '@nestjs/common';
 import {
   ActionStatus,
   AutomationRunStatus,
+  BillingEventType,
   BookingStatus,
   LeadStatus,
   InvoiceStatus,
   Prisma,
+  SubscriptionStatus,
   TenantStatus,
   WebhookEventStatus,
 } from '@prisma/client';
@@ -14,6 +16,7 @@ import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../common/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
+import { CreateBillingEventDto } from './dto/create-billing-event.dto';
 import { CreateSupportNoteDto } from './dto/create-support-note.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
 
@@ -34,6 +37,8 @@ export class PlatformService {
       failedAutomations,
       failedWebhooks,
       paidRevenue,
+      mrr,
+      pastDueTenants,
     ] = await Promise.all([
       this.prisma.tenant.groupBy({
         by: ['status'],
@@ -55,6 +60,17 @@ export class PlatformService {
         where: { status: InvoiceStatus.PAID },
         _sum: { totalCents: true },
       }),
+      this.prisma.tenant.aggregate({
+        where: { subscriptionStatus: SubscriptionStatus.ACTIVE },
+        _sum: { monthlyPriceCents: true },
+      }),
+      this.prisma.tenant.count({
+        where: {
+          subscriptionStatus: {
+            in: [SubscriptionStatus.PAST_DUE, SubscriptionStatus.UNPAID],
+          },
+        },
+      }),
     ]);
 
     return {
@@ -69,6 +85,8 @@ export class PlatformService {
       failedAutomations,
       failedWebhooks,
       paidRevenueCents: paidRevenue._sum.totalCents ?? 0,
+      mrrCents: mrr._sum.monthlyPriceCents ?? 0,
+      pastDueTenants,
     };
   }
 
@@ -125,6 +143,25 @@ export class PlatformService {
         billingEmail: dto.billingEmail,
         monthlyPriceCents: dto.monthlyPriceCents,
         setupFeeCents: dto.setupFeeCents,
+        subscriptionStatus: dto.subscriptionStatus,
+        trialEndsAt: dto.trialEndsAt ? new Date(dto.trialEndsAt) : undefined,
+        currentPeriodEnd: dto.currentPeriodEnd ? new Date(dto.currentPeriodEnd) : undefined,
+        nextBillingAt: dto.nextBillingAt ? new Date(dto.nextBillingAt) : undefined,
+        stripeCustomerId: dto.stripeCustomerId,
+        stripeSubscriptionId: dto.stripeSubscriptionId,
+        pastDueAt:
+          dto.subscriptionStatus === SubscriptionStatus.PAST_DUE ||
+          dto.subscriptionStatus === SubscriptionStatus.UNPAID
+            ? new Date()
+            : dto.subscriptionStatus
+              ? null
+              : undefined,
+        canceledAt:
+          dto.subscriptionStatus === SubscriptionStatus.CANCELED
+            ? new Date()
+            : dto.subscriptionStatus
+              ? null
+              : undefined,
         featureFlags: dto.featureFlags as Prisma.InputJsonValue,
         planLimits: dto.planLimits as Prisma.InputJsonValue,
         suspendedAt: dto.status === TenantStatus.SUSPENDED ? new Date() : null,
@@ -144,6 +181,12 @@ export class PlatformService {
         billingEmail: dto.billingEmail,
         monthlyPriceCents: dto.monthlyPriceCents,
         setupFeeCents: dto.setupFeeCents,
+        subscriptionStatus: dto.subscriptionStatus,
+        trialEndsAt: dto.trialEndsAt,
+        currentPeriodEnd: dto.currentPeriodEnd,
+        nextBillingAt: dto.nextBillingAt,
+        stripeCustomerId: dto.stripeCustomerId,
+        stripeSubscriptionId: dto.stripeSubscriptionId,
         featureFlags: dto.featureFlags,
         planLimits: dto.planLimits,
       },
@@ -290,6 +333,88 @@ export class PlatformService {
     });
   }
 
+  billingEvents(id: string) {
+    return this.prisma.platformBillingEvent.findMany({
+      where: { tenantId: id },
+      include: { actor: { select: { id: true, email: true, role: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+  }
+
+  async createBillingEvent(
+    user: AuthUser,
+    id: string,
+    dto: CreateBillingEventDto,
+  ) {
+    const event = await this.prisma.platformBillingEvent.create({
+      data: {
+        tenantId: id,
+        actorId: user.sub,
+        type: dto.type,
+        amountCents: dto.amountCents,
+        provider: dto.provider ?? 'manual',
+        note: dto.note,
+        metadata: dto.metadata as Prisma.InputJsonValue,
+      },
+      include: { actor: { select: { id: true, email: true, role: true } } },
+    });
+
+    await this.applyBillingEventToTenant(id, dto);
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_BILLING_EVENT_CREATED',
+      entityType: 'Tenant',
+      entityId: id,
+      summary: `Platform admin recorded ${dto.type}`,
+      metadata: {
+        type: dto.type,
+        amountCents: dto.amountCents,
+        provider: dto.provider,
+      },
+    });
+
+    return event;
+  }
+
+  async billingSummary(id: string) {
+    const [tenant, events] = await Promise.all([
+      this.prisma.tenant.findUniqueOrThrow({ where: { id } }),
+      this.prisma.platformBillingEvent.findMany({
+        where: { tenantId: id },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+    ]);
+    const collectedCents = events
+      .filter((event) =>
+        event.type === BillingEventType.SETUP_FEE_PAID ||
+        event.type === BillingEventType.SUBSCRIPTION_STARTED ||
+        event.type === BillingEventType.SUBSCRIPTION_RENEWED,
+      )
+      .reduce((sum, event) => sum + (event.amountCents ?? 0), 0);
+    const failedCount = events.filter(
+      (event) => event.type === BillingEventType.PAYMENT_FAILED,
+    ).length;
+
+    return {
+      tenantId: id,
+      subscriptionStatus: tenant.subscriptionStatus,
+      monthlyPriceCents: tenant.monthlyPriceCents,
+      setupFeeCents: tenant.setupFeeCents,
+      trialEndsAt: tenant.trialEndsAt,
+      currentPeriodEnd: tenant.currentPeriodEnd,
+      nextBillingAt: tenant.nextBillingAt,
+      pastDueAt: tenant.pastDueAt,
+      canceledAt: tenant.canceledAt,
+      collectedCents,
+      failedCount,
+      events,
+    };
+  }
+
   async createSupportAccess(
     user: AuthUser,
     id: string,
@@ -342,5 +467,56 @@ export class PlatformService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
+  }
+
+  private async applyBillingEventToTenant(
+    tenantId: string,
+    dto: CreateBillingEventDto,
+  ) {
+    const now = new Date();
+    const nextMonth = new Date(now);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+    if (
+      dto.type === BillingEventType.SUBSCRIPTION_STARTED ||
+      dto.type === BillingEventType.SUBSCRIPTION_RENEWED
+    ) {
+      await this.prisma.tenant.update({
+        where: { id: tenantId },
+        data: {
+          status: TenantStatus.ACTIVE,
+          subscriptionStatus: SubscriptionStatus.ACTIVE,
+          monthlyPriceCents: dto.amountCents,
+          currentPeriodEnd: nextMonth,
+          nextBillingAt: nextMonth,
+          pastDueAt: null,
+          canceledAt: null,
+        },
+      });
+    }
+
+    if (
+      dto.type === BillingEventType.PAYMENT_FAILED ||
+      dto.type === BillingEventType.PAST_DUE
+    ) {
+      await this.prisma.tenant.update({
+        where: { id: tenantId },
+        data: {
+          subscriptionStatus: SubscriptionStatus.PAST_DUE,
+          pastDueAt: now,
+        },
+      });
+    }
+
+    if (dto.type === BillingEventType.CANCELED) {
+      await this.prisma.tenant.update({
+        where: { id: tenantId },
+        data: {
+          status: TenantStatus.CHURNED,
+          subscriptionStatus: SubscriptionStatus.CANCELED,
+          canceledAt: now,
+        },
+      });
+    }
   }
 }

@@ -4,6 +4,7 @@ import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
 import { Roles } from '../common/roles.decorator';
+import { CreateBillingEventDto } from './dto/create-billing-event.dto';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateSupportNoteDto } from './dto/create-support-note.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
@@ -76,6 +77,25 @@ export class PlatformController {
     @Body() dto: CreateSupportAccessDto,
   ) {
     return this.platform.createSupportAccess(user, id, dto);
+  }
+
+  @Get('tenants/:id/billing')
+  billingSummary(@Param('id') id: string) {
+    return this.platform.billingSummary(id);
+  }
+
+  @Get('tenants/:id/billing-events')
+  billingEvents(@Param('id') id: string) {
+    return this.platform.billingEvents(id);
+  }
+
+  @Post('tenants/:id/billing-events')
+  createBillingEvent(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: CreateBillingEventDto,
+  ) {
+    return this.platform.createBillingEvent(user, id, dto);
   }
 
   @Get('automation-failures')
