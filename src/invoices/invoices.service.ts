@@ -206,6 +206,11 @@ export class InvoicesService {
     return invoice;
   }
 
+  async createFromBookingForUser(user: AuthUser, bookingId: string) {
+    assertManager(user);
+    return this.createFromBooking(user.tenantId, bookingId, user.sub);
+  }
+
   async updateStatus(user: AuthUser, id: string, status: InvoiceStatus) {
     assertManager(user);
     const existing = await this.prisma.invoice.findFirst({

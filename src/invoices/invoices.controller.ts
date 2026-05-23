@@ -25,6 +25,15 @@ export class InvoicesController {
     return this.invoices.create(user, dto);
   }
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
+  @Post('from-booking/:bookingId')
+  createFromBooking(
+    @CurrentUser() user: AuthUser,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.invoices.createFromBookingForUser(user, bookingId);
+  }
+
   @Get()
   findAll(
     @CurrentUser() user: AuthUser,

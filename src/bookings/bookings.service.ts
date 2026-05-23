@@ -4,12 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BookingStatus, Prisma, UserRole } from '@prisma/client';
+import { BookingStatus, InvoiceStatus, Prisma, UserRole } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { AutomationsService } from '../automations/automations.service';
 import { addMinutes } from '../common/domain';
 import { AuthUser } from '../common/current-user.decorator';
 import { assertManager, isManager } from '../common/permissions';
+import { InvoicesService } from '../invoices/invoices.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkflowsService } from '../workflows/workflows.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -48,6 +49,7 @@ export class BookingsService {
     private readonly audit: AuditService,
     private readonly automations: AutomationsService,
     private readonly workflows: WorkflowsService,
+    private readonly invoices: InvoicesService,
   ) {}
 
   async create(user: AuthUser, dto: CreateBookingDto) {
@@ -209,7 +211,7 @@ export class BookingsService {
       this.assertStatusTransition(existing.status, dto.status);
     }
 
-    const booking = await this.prisma.booking.update({
+    let booking = await this.prisma.booking.update({
       where: { id, tenantId },
       data: {
         customerId: dto.customerId,
@@ -222,6 +224,14 @@ export class BookingsService {
       },
       include: this.include(),
     });
+
+    if (booking.status === BookingStatus.COMPLETED && !booking.invoice) {
+      await this.invoices.createFromBooking(tenantId, booking.id, user.sub);
+      booking = await this.prisma.booking.findFirstOrThrow({
+        where: { id: booking.id, tenantId },
+        include: this.include(),
+      });
+    }
 
     await this.audit.record({
       tenantId,
@@ -255,7 +265,11 @@ export class BookingsService {
     id: string;
     tenantId: string;
     customerId: string;
+    assignedStaffId?: string | null;
     status: BookingStatus;
+    startTime?: Date;
+    endTime?: Date | null;
+    invoice?: { id: string; status: InvoiceStatus } | null;
   }) {
     const triggerByStatus: Partial<
       Record<
@@ -469,6 +483,8 @@ export class BookingsService {
       assignedStaff: {
         select: { id: true, name: true, email: true, phone: true, role: true },
       },
+      invoice: true,
+      fieldJobReport: true,
     };
   }
 }
