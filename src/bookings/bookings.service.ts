@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BookingStatus, UserRole } from '@prisma/client';
+import { BookingStatus, Prisma, UserRole } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { AutomationsService } from '../automations/automations.service';
 import { addMinutes } from '../common/domain';
@@ -53,38 +53,48 @@ export class BookingsService {
   async create(user: AuthUser, dto: CreateBookingDto) {
     assertManager(user);
     const tenantId = user.tenantId;
-    await this.assertCustomer(tenantId, dto.customerId);
+    const customerId = await this.resolveCustomerId(tenantId, dto);
     const service = await this.prisma.service.findFirstOrThrow({
       where: { id: dto.serviceId, tenantId, active: true },
     });
-    const startTime = new Date(dto.startTime);
-    const endTime = addMinutes(startTime, service.durationMinutes);
     const assignedStaffId = dto.assignedStaffId;
+    const startTimes = this.buildRepeatStartTimes(dto);
 
     if (assignedStaffId) {
       await this.assertStaff(tenantId, assignedStaffId);
-      await this.assertNoStaffConflict(
-        tenantId,
-        assignedStaffId,
-        startTime,
-        endTime,
-      );
+      for (const startTime of startTimes) {
+        await this.assertNoStaffConflict(
+          tenantId,
+          assignedStaffId,
+          startTime,
+          addMinutes(startTime, service.durationMinutes),
+        );
+      }
     }
 
-    const booking = await this.prisma.booking.create({
-      data: {
-        tenantId,
-        customerId: dto.customerId,
-        serviceId: dto.serviceId,
-        assignedStaffId,
-        startTime,
-        endTime,
-        status: dto.status ?? BookingStatus.CONFIRMED,
-        source: dto.source ?? 'manual',
-        notes: dto.notes,
-      },
-      include: this.include(),
-    });
+    const bookings: Prisma.BookingGetPayload<{
+      include: ReturnType<BookingsService['include']>;
+    }>[] = [];
+
+    for (const startTime of startTimes) {
+      const booking = await this.prisma.booking.create({
+        data: {
+          tenantId,
+          customerId,
+          serviceId: dto.serviceId,
+          assignedStaffId,
+          startTime,
+          endTime: addMinutes(startTime, service.durationMinutes),
+          status: dto.status ?? BookingStatus.CONFIRMED,
+          source: dto.source ?? 'manual',
+          notes: dto.notes,
+        },
+        include: this.include(),
+      });
+      bookings.push(booking);
+    }
+
+    const booking = bookings[0];
 
     await this.audit.record({
       tenantId,
@@ -92,17 +102,21 @@ export class BookingsService {
       action: 'BOOKING_CREATED',
       entityType: 'Booking',
       entityId: booking.id,
-      summary: `Created booking for ${booking.customer.name}`,
-      metadata: { status: booking.status, startTime: booking.startTime },
+      summary:
+        bookings.length === 1
+          ? `Created booking for ${booking.customer.name}`
+          : `Created ${bookings.length} recurring bookings for ${booking.customer.name}`,
+      metadata: {
+        status: booking.status,
+        startTime: booking.startTime,
+        repeatFrequency: dto.repeatFrequency ?? 'none',
+        repeatCount: bookings.length,
+        bookingIds: bookings.map((item) => item.id),
+      },
     });
 
-    if (booking.status === BookingStatus.CONFIRMED) {
-      await this.automations.trigger({
-        tenantId,
-        trigger: 'BOOKING_CONFIRMED',
-        customerId: booking.customerId,
-        bookingId: booking.id,
-      });
+    for (const item of bookings) {
+      await this.triggerBookingAutomation(item);
     }
 
     return booking;
@@ -269,6 +283,81 @@ export class BookingsService {
     }
 
     await this.workflows.handleBookingStatusChanged(booking);
+  }
+
+  private async resolveCustomerId(tenantId: string, dto: CreateBookingDto) {
+    if (dto.customerId) {
+      await this.assertCustomer(tenantId, dto.customerId);
+      return dto.customerId;
+    }
+
+    if (!dto.inlineCustomer) {
+      throw new BadRequestException(
+        'Provide an existing customerId or inlineCustomer details',
+      );
+    }
+
+    const phone = dto.inlineCustomer.phone.trim();
+    const name = dto.inlineCustomer.name.trim();
+
+    if (!phone || !name) {
+      throw new BadRequestException('Customer name and phone are required');
+    }
+
+    const customer = await this.prisma.customer.upsert({
+      where: { tenantId_phone: { tenantId, phone } },
+      update: {
+        name,
+        email: dto.inlineCustomer.email?.trim() || undefined,
+        notes: dto.inlineCustomer.notes?.trim() || undefined,
+      },
+      create: {
+        tenantId,
+        name,
+        phone,
+        email: dto.inlineCustomer.email?.trim() || undefined,
+        notes: dto.inlineCustomer.notes?.trim() || undefined,
+      },
+      select: { id: true },
+    });
+
+    return customer.id;
+  }
+
+  private buildRepeatStartTimes(dto: CreateBookingDto) {
+    const frequency = dto.repeatFrequency ?? 'none';
+    const count = frequency === 'none' ? 1 : Math.min(dto.repeatCount ?? 1, 12);
+    const firstStart = new Date(dto.startTime);
+
+    if (Number.isNaN(firstStart.getTime())) {
+      throw new BadRequestException('Invalid booking start time');
+    }
+
+    return Array.from({ length: count }, (_, index) =>
+      this.addRepeatInterval(firstStart, frequency, index),
+    );
+  }
+
+  private addRepeatInterval(
+    startTime: Date,
+    frequency: 'none' | 'weekly' | 'biweekly' | 'monthly',
+    index: number,
+  ) {
+    const next = new Date(startTime);
+
+    if (frequency === 'weekly') {
+      next.setDate(next.getDate() + index * 7);
+    }
+
+    if (frequency === 'biweekly') {
+      next.setDate(next.getDate() + index * 14);
+    }
+
+    if (frequency === 'monthly') {
+      next.setMonth(next.getMonth() + index);
+    }
+
+    return next;
   }
 
   private async assertCustomer(tenantId: string, customerId: string) {
