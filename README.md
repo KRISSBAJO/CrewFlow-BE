@@ -42,6 +42,7 @@ owner@sparkle.test / Password123!
 - `POST /api/auth/login`
 - `GET /api/dashboard`
 - `GET|POST /api/customers`
+- `GET /api/customers/:id/timeline`
 - `GET|POST /api/services`
 - `GET|POST|PATCH /api/bookings`
 - `POST /api/bookings/:id/on-the-way`
@@ -67,5 +68,11 @@ owner@sparkle.test / Password123!
 - `GET /api/receptionist/conversations`
 - `GET /api/receptionist/conversations/:id`
 - `POST /api/receptionist/conversations/:id/handoff`
+- `GET|PATCH /api/inbox/:id`
+- `GET /api/inbox`
+- `POST /api/inbox/:id/reply`
+- `POST /api/inbox/:id/ai-suggest`
+- `POST /api/inbox/:id/actions`
+- `POST /api/inbox/:id/booking-intents`
 
 Every protected endpoint is tenant-scoped from the JWT payload.

@@ -72,8 +72,10 @@ enum WebhookEventStatus {
 
 enum ConversationStatus {
   OPEN
+  WAITING_ON_CUSTOMER
   BOOKING_READY
   HANDED_OFF
+  RESOLVED
   CLOSED
 }
 
@@ -175,6 +177,7 @@ model User {
   bookings               Booking[]           @relation("AssignedStaff")
   attendance             Attendance[]
   assignedActions        OperationalAction[] @relation("ActionAssignee")
+  assignedConversations  Conversation[]      @relation("ConversationAssignee")
   auditLogs              AuditLog[]
   handedOffConversations Conversation[]      @relation("ConversationHandoff")
 
@@ -471,6 +474,9 @@ model Conversation {
   channel        MessageProvider       @default(WEB_CHAT)
   status         ConversationStatus    @default(OPEN)
   lastMessageAt  DateTime              @default(now())
+  assignedToId   String?
+  followUpAt     DateTime?
+  resolvedAt     DateTime?
   handedOffAt    DateTime?
   handedOffToId  String?
   handoffReason  String?
@@ -478,6 +484,7 @@ model Conversation {
   updatedAt      DateTime              @updatedAt
   tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customer       Customer?             @relation(fields: [customerId], references: [id])
+  assignedTo     User?                 @relation("ConversationAssignee", fields: [assignedToId], references: [id])
   handedOffTo    User?                 @relation("ConversationHandoff", fields: [handedOffToId], references: [id])
   messages       ConversationMessage[]
   bookingIntents BookingIntent[]

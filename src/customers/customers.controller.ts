@@ -35,6 +35,11 @@ export class CustomersController {
     return this.customers.findOne(user.tenantId, id);
   }
 
+  @Get(':id/timeline')
+  timeline(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.customers.timeline(user.tenantId, id);
+  }
+
   @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Patch(':id')
   update(

@@ -11,6 +11,7 @@ import { RolesGuard } from './common/roles.guard';
 import { CustomersModule } from './customers/customers.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { InvoicesModule } from './invoices/invoices.module';
+import { InboxModule } from './inbox/inbox.module';
 import { MessagesModule } from './messages/messages.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -32,6 +33,7 @@ import { WorkflowsModule } from './workflows/workflows.module';
     BookingsModule,
     AttendanceModule,
     InvoicesModule,
+    InboxModule,
     PaymentsModule,
     MessagesModule,
     AutomationsModule,
