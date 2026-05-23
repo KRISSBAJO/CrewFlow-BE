@@ -18,6 +18,7 @@ import { AuditService } from '../audit/audit.service';
 import { AutomationsService } from '../automations/automations.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RetentionService } from '../retention/retention.service';
+import { WorkflowsService } from '../workflows/workflows.service';
 
 @Injectable()
 export class OperationsSchedulerService
@@ -31,6 +32,7 @@ export class OperationsSchedulerService
     private readonly automations: AutomationsService,
     private readonly audit: AuditService,
     private readonly retention: RetentionService,
+    private readonly workflows: WorkflowsService,
   ) {}
 
   onModuleInit() {
@@ -64,13 +66,14 @@ export class OperationsSchedulerService
   }
 
   async runTenantScans(tenantId: string, source = 'manual') {
-    const [overdue, lostRevenue, leadFollowUps, retention] = await Promise.all([
+    const [overdue, lostRevenue, leadFollowUps, retention, billingRecovery] = await Promise.all([
       this.scanOverdueInvoices(tenantId, source),
       this.scanLostRevenue(tenantId, source),
       this.scanLeadFollowUps(tenantId, source),
       this.retention.scanTenant(tenantId, source),
+      this.workflows.scanBillingRecoveryForTenant(tenantId, source),
     ]);
-    return { tenantId, overdue, lostRevenue, leadFollowUps, retention };
+    return { tenantId, overdue, lostRevenue, leadFollowUps, retention, billingRecovery };
   }
 
   private async scanOverdueInvoices(tenantId: string, source: string) {

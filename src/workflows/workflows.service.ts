@@ -12,6 +12,7 @@ import {
   InvoiceStatus,
   LeadStatus,
   Prisma,
+  SubscriptionStatus,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { AutomationsService } from '../automations/automations.service';
@@ -425,6 +426,148 @@ export class WorkflowsService {
     };
   }
 
+  async scanBillingRecovery(user: AuthUser) {
+    assertManager(user);
+    const result = await this.scanBillingRecoveryForTenant(
+      user.tenantId,
+      'manual-api',
+      user.sub,
+    );
+    await this.audit.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'BILLING_RECOVERY_SCAN',
+      entityType: 'Tenant',
+      summary: `Scanned billing recovery and found ${result.actionsCreatedOrUpdated}`,
+      metadata: {
+        scannedAt: result.scannedAt,
+        subscriptionStatus: result.subscriptionStatus,
+        usage: result.usage,
+        limits: result.limits,
+        actionsCreatedOrUpdated: result.actionsCreatedOrUpdated,
+      },
+    });
+    return result;
+  }
+
+  async scanBillingRecoveryForTenant(
+    tenantId: string,
+    source = 'scheduler',
+    actorId?: string,
+  ) {
+    const now = new Date();
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: {
+        id: true,
+        businessName: true,
+        subscriptionStatus: true,
+        monthlyPriceCents: true,
+        nextBillingAt: true,
+        pastDueAt: true,
+        planLimits: true,
+      },
+    });
+    const usage = await this.billingUsage(tenantId);
+    const limits = this.asPlanLimits(tenant.planLimits);
+    const actions: unknown[] = [];
+
+    if (
+      tenant.subscriptionStatus === SubscriptionStatus.PAST_DUE ||
+      tenant.subscriptionStatus === SubscriptionStatus.UNPAID
+    ) {
+      const daysPastDue = tenant.pastDueAt
+        ? this.daysBetween(tenant.pastDueAt, now)
+        : 0;
+      actions.push(
+        await this.upsertAction({
+          tenantId,
+          type: ActionType.COLLECT_PAYMENT,
+          priority: daysPastDue >= 7 ? ActionPriority.URGENT : ActionPriority.HIGH,
+          title: 'Recover past-due CrewFlow subscription',
+          description:
+            'Billing is past due. Contact the owner, update payment details, or pause risky expansion until payment is recovered.',
+          assignedToId: actorId,
+          dueAt: now,
+          metadata: {
+            kind: 'billing_recovery',
+            source,
+            subscriptionStatus: tenant.subscriptionStatus,
+            daysPastDue,
+            monthlyPriceCents: tenant.monthlyPriceCents,
+          },
+        }),
+      );
+    }
+
+    if (tenant.nextBillingAt) {
+      const daysUntilBilling = Math.ceil(
+        (tenant.nextBillingAt.getTime() - now.getTime()) / 86_400_000,
+      );
+      if (daysUntilBilling <= 3 && daysUntilBilling >= 0) {
+        actions.push(
+          await this.upsertAction({
+            tenantId,
+            type: ActionType.COLLECT_PAYMENT,
+            priority: ActionPriority.MEDIUM,
+            title: 'Upcoming CrewFlow renewal',
+            description:
+              'Renewal is coming up. Confirm billing contact and payment method are current.',
+            assignedToId: actorId,
+            dueAt: now,
+            metadata: {
+              kind: 'billing_renewal',
+              source,
+              nextBillingAt: tenant.nextBillingAt,
+              daysUntilBilling,
+              monthlyPriceCents: tenant.monthlyPriceCents,
+            },
+          }),
+        );
+      }
+    }
+
+    for (const [key, limit] of Object.entries(limits)) {
+      const used = usage[key] ?? 0;
+      if (limit > 0 && used / limit >= 0.8) {
+        actions.push(
+          await this.upsertAction({
+            tenantId,
+            type: ActionType.COLLECT_PAYMENT,
+            priority: used >= limit ? ActionPriority.HIGH : ActionPriority.MEDIUM,
+            title:
+              used >= limit
+                ? `Plan limit reached: ${this.humanizeLimit(key)}`
+                : `Plan usage nearing limit: ${this.humanizeLimit(key)}`,
+            description:
+              used >= limit
+                ? 'The team has hit a plan limit. Upgrade the plan before operations are blocked.'
+                : 'Usage is above 80% of plan capacity. Start the upgrade conversation before work slows down.',
+            assignedToId: actorId,
+            dueAt: now,
+            metadata: {
+              kind: 'plan_usage_warning',
+              source,
+              limitKey: key,
+              used,
+              limit,
+              percentUsed: Math.round((used / limit) * 100),
+            },
+          }),
+        );
+      }
+    }
+
+    return {
+      scannedAt: now,
+      subscriptionStatus: tenant.subscriptionStatus,
+      usage,
+      limits,
+      actionsCreatedOrUpdated: actions.length,
+      actions,
+    };
+  }
+
   private async upsertAction(input: {
     tenantId: string;
     type: ActionType;
@@ -480,6 +623,7 @@ export class WorkflowsService {
     metadata?: Prisma.InputJsonValue;
   }) {
     const leadId = this.metadataLeadId(input.metadata);
+    const metadataKey = this.metadataActionKey(input.metadata);
     const parts = [
       input.type,
       input.bookingId ?? 'no-booking',
@@ -488,6 +632,9 @@ export class WorkflowsService {
     ];
     if (leadId) {
       parts.push(leadId);
+    }
+    if (metadataKey) {
+      parts.push(metadataKey);
     }
     return parts.join(':');
   }
@@ -559,6 +706,50 @@ export class WorkflowsService {
       return typeof value === 'string' ? value : null;
     }
     return null;
+  }
+
+  private metadataActionKey(metadata?: Prisma.InputJsonValue) {
+    if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+      const data = metadata as Record<string, unknown>;
+      const kind = typeof data.kind === 'string' ? data.kind : null;
+      const limitKey =
+        typeof data.limitKey === 'string' ? data.limitKey : null;
+      return [kind, limitKey].filter(Boolean).join(':') || null;
+    }
+    return null;
+  }
+
+  private async billingUsage(tenantId: string) {
+    const now = new Date();
+    const monthStart = new Date(now);
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthEnd = new Date(monthStart);
+    monthEnd.setMonth(monthEnd.getMonth() + 1);
+    const [staff, customers, leads, monthlyBookings] = await Promise.all([
+      this.prisma.user.count({ where: { tenantId, active: true } }),
+      this.prisma.customer.count({ where: { tenantId } }),
+      this.prisma.lead.count({ where: { tenantId } }),
+      this.prisma.booking.count({
+        where: { tenantId, startTime: { gte: monthStart, lt: monthEnd } },
+      }),
+    ]);
+    return { staff, customers, leads, monthlyBookings };
+  }
+
+  private asPlanLimits(value: unknown): Record<string, number> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).filter(
+        ([, limit]) => typeof limit === 'number',
+      ),
+    ) as Record<string, number>;
+  }
+
+  private humanizeLimit(value: string) {
+    return value.replace(/([A-Z])/g, ' $1').toLowerCase();
   }
 
   private daysBetween(from: Date, to: Date) {

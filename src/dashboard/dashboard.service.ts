@@ -8,6 +8,7 @@ import {
   ConversationStatus,
   InvoiceStatus,
   LeadStatus,
+  SubscriptionStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -40,6 +41,7 @@ export class DashboardService {
       completedUnpaid,
       repeatBookingActions,
       winBackActions,
+      tenant,
     ] = await Promise.all([
       this.prisma.booking.findMany({
         where: { tenantId, startTime: { gte: start, lte: end } },
@@ -182,6 +184,15 @@ export class DashboardService {
           status: { in: [ActionStatus.OPEN, ActionStatus.IN_PROGRESS] },
         },
       }),
+      this.prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: {
+          subscriptionStatus: true,
+          pastDueAt: true,
+          nextBillingAt: true,
+          planLimits: true,
+        },
+      }),
     ]);
 
     const noShowRiskCents = noShows.reduce(
@@ -227,6 +238,11 @@ export class DashboardService {
           completedUnpaid,
           repeatBookingActions,
           winBackActions,
+          billingRisk: this.billingRisk(tenant, {
+            activeStaff,
+            hotLeads,
+            monthlyBookings: await this.monthlyBookings(tenantId),
+          }),
         }),
       },
     };
@@ -246,6 +262,12 @@ export class DashboardService {
     completedUnpaid: number;
     repeatBookingActions: number;
     winBackActions: number;
+    billingRisk: Array<{
+      key: string;
+      severity: 'info' | 'warning' | 'critical';
+      title: string;
+      value?: number;
+    }>;
   }) {
     const alerts: Array<{
       key: string;
@@ -345,6 +367,7 @@ export class DashboardService {
         value: input.urgentActionCount,
       });
     }
+    alerts.push(...input.billingRisk);
 
     if (alerts.length === 0) {
       alerts.push({
@@ -355,6 +378,89 @@ export class DashboardService {
     }
 
     return alerts;
+  }
+
+  private billingRisk(
+    tenant: {
+      subscriptionStatus: SubscriptionStatus;
+      pastDueAt?: Date | null;
+      nextBillingAt?: Date | null;
+      planLimits?: unknown;
+    },
+    usage: { activeStaff: number; hotLeads: number; monthlyBookings: number },
+  ) {
+    const alerts: Array<{
+      key: string;
+      severity: 'info' | 'warning' | 'critical';
+      title: string;
+      value?: number;
+    }> = [];
+    if (
+      tenant.subscriptionStatus === SubscriptionStatus.PAST_DUE ||
+      tenant.subscriptionStatus === SubscriptionStatus.UNPAID
+    ) {
+      alerts.push({
+        key: 'billing-past-due',
+        severity: 'critical',
+        title: 'Subscription billing needs recovery',
+      });
+    }
+    if (tenant.nextBillingAt) {
+      const days = Math.ceil(
+        (tenant.nextBillingAt.getTime() - Date.now()) / 86_400_000,
+      );
+      if (days >= 0 && days <= 3) {
+        alerts.push({
+          key: 'billing-renewal-soon',
+          severity: 'info',
+          title: 'Subscription renewal is coming up',
+          value: days,
+        });
+      }
+    }
+    const limits = this.asPlanLimits(tenant.planLimits);
+    const trackedUsage = {
+      staff: usage.activeStaff,
+      leads: usage.hotLeads,
+      monthlyBookings: usage.monthlyBookings,
+    };
+    for (const [key, limit] of Object.entries(limits)) {
+      const used = trackedUsage[key as keyof typeof trackedUsage];
+      if (typeof used === 'number' && limit > 0 && used / limit >= 0.8) {
+        alerts.push({
+          key: `plan-usage-${key}`,
+          severity: used >= limit ? 'critical' : 'warning',
+          title:
+            used >= limit
+              ? `Plan limit reached: ${key}`
+              : `Plan usage above 80%: ${key}`,
+          value: used,
+        });
+      }
+    }
+    return alerts;
+  }
+
+  private async monthlyBookings(tenantId: string) {
+    const start = new Date();
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + 1);
+    return this.prisma.booking.count({
+      where: { tenantId, startTime: { gte: start, lt: end } },
+    });
+  }
+
+  private asPlanLimits(value: unknown): Record<string, number> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).filter(
+        ([, limit]) => typeof limit === 'number',
+      ),
+    ) as Record<string, number>;
   }
 
   private hoursAgo(hours: number) {

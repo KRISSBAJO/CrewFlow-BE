@@ -60,4 +60,10 @@ export class WorkflowsController {
   scanLeadFollowUps(@CurrentUser() user: AuthUser) {
     return this.workflows.scanLeadFollowUps(user);
   }
+
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
+  @Post('workflows/scan-billing-recovery')
+  scanBillingRecovery(@CurrentUser() user: AuthUser) {
+    return this.workflows.scanBillingRecovery(user);
+  }
 }

@@ -81,6 +81,12 @@ actions="$(
 )"
 echo "actions: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.length} open actions`)' "$actions")"
 
+billing_recovery="$(
+  curl -fsS -X POST "$API_URL/workflows/scan-billing-recovery" \
+    -H "Authorization: Bearer $token"
+)"
+echo "billing recovery: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.actionsCreatedOrUpdated} actions`)' "$billing_recovery")"
+
 admin_token="$(
   curl -fsS -X POST "$API_URL/auth/login" \
     -H 'Content-Type: application/json' \
