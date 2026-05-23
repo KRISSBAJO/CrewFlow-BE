@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import {
   ActionStatus,
   AutomationRunStatus,
@@ -8,6 +8,7 @@ import {
   InvoiceStatus,
   Prisma,
   SubscriptionStatus,
+  Tenant,
   TenantStatus,
   WebhookEventStatus,
 } from '@prisma/client';
@@ -17,8 +18,21 @@ import type { AuthUser } from '../common/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateBillingEventDto } from './dto/create-billing-event.dto';
+import { CreatePlatformCheckoutDto } from './dto/create-platform-checkout.dto';
 import { CreateSupportNoteDto } from './dto/create-support-note.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
+
+type StripeCheckoutSession = {
+  id: string;
+  url?: string;
+  customer?: string;
+  subscription?: string;
+};
+
+type StripePortalSession = {
+  id: string;
+  url?: string;
+};
 
 @Injectable()
 export class PlatformService {
@@ -404,6 +418,10 @@ export class PlatformService {
       subscriptionStatus: tenant.subscriptionStatus,
       monthlyPriceCents: tenant.monthlyPriceCents,
       setupFeeCents: tenant.setupFeeCents,
+      billingEmail: tenant.billingEmail,
+      stripeCustomerId: tenant.stripeCustomerId,
+      stripeSubscriptionId: tenant.stripeSubscriptionId,
+      stripeConfigured: Boolean(process.env.STRIPE_SECRET_KEY),
       trialEndsAt: tenant.trialEndsAt,
       currentPeriodEnd: tenant.currentPeriodEnd,
       nextBillingAt: tenant.nextBillingAt,
@@ -412,6 +430,183 @@ export class PlatformService {
       collectedCents,
       failedCount,
       events,
+    };
+  }
+
+  async createBillingCheckout(
+    user: AuthUser,
+    id: string,
+    dto: CreatePlatformCheckoutDto,
+  ) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id },
+    });
+    const monthlyPriceCents =
+      dto.monthlyPriceCents ?? tenant.monthlyPriceCents ?? 29900;
+    const setupFeeCents = dto.setupFeeCents ?? tenant.setupFeeCents ?? 0;
+    const collectSetupFee = dto.collectSetupFee ?? setupFeeCents > 0;
+
+    if (monthlyPriceCents <= 0) {
+      throw new BadRequestException('Monthly price must be greater than zero');
+    }
+
+    const checkout = process.env.STRIPE_SECRET_KEY
+      ? await this.createStripeSubscriptionCheckout({
+          tenant,
+          monthlyPriceCents,
+          setupFeeCents: collectSetupFee ? setupFeeCents : 0,
+          successUrl: dto.successUrl,
+          cancelUrl: dto.cancelUrl,
+        })
+      : this.createMockSubscriptionCheckout(id);
+
+    await this.prisma.tenant.update({
+      where: { id },
+      data: {
+        monthlyPriceCents,
+        setupFeeCents,
+        stripeCustomerId: checkout.customerId ?? tenant.stripeCustomerId,
+        stripeSubscriptionId:
+          checkout.subscriptionId ?? tenant.stripeSubscriptionId,
+      },
+    });
+
+    await this.prisma.platformBillingEvent.create({
+      data: {
+        tenantId: id,
+        actorId: user.sub,
+        type: BillingEventType.SETUP_FEE_INVOICED,
+        amountCents: collectSetupFee ? setupFeeCents : monthlyPriceCents,
+        provider: checkout.provider,
+        providerEventId: checkout.sessionId,
+        note: checkout.mock
+          ? 'Mock platform subscription checkout created.'
+          : 'Stripe platform subscription checkout created.',
+        metadata: {
+          checkoutUrl: checkout.url,
+          monthlyPriceCents,
+          setupFeeCents: collectSetupFee ? setupFeeCents : 0,
+        },
+      },
+    });
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_BILLING_CHECKOUT_CREATED',
+      entityType: 'Tenant',
+      entityId: id,
+      summary: `Platform admin created billing checkout for ${tenant.businessName}`,
+      metadata: {
+        checkoutUrl: checkout.url,
+        monthlyPriceCents,
+        setupFeeCents: collectSetupFee ? setupFeeCents : 0,
+        provider: checkout.provider,
+      },
+    });
+
+    return checkout;
+  }
+
+  async createBillingPortal(user: AuthUser, id: string) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id } });
+    if (!tenant.stripeCustomerId) {
+      throw new BadRequestException('Tenant does not have a Stripe customer yet');
+    }
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (!secret) {
+      throw new BadRequestException('STRIPE_SECRET_KEY is not configured');
+    }
+
+    const apiBase = process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api';
+    const returnUrl =
+      process.env.PLATFORM_BILLING_PORTAL_RETURN_URL ??
+      process.env.PLATFORM_BILLING_SUCCESS_URL ??
+      `${apiBase.replace('/api', '')}/admin`;
+    const params = new URLSearchParams();
+    params.set('customer', tenant.stripeCustomerId);
+    params.set('return_url', returnUrl);
+
+    const response = await fetch(
+      'https://api.stripe.com/v1/billing_portal/sessions',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: params,
+      },
+    );
+
+    if (!response.ok) {
+      throw new BadRequestException(await response.text());
+    }
+
+    const session = (await response.json()) as StripePortalSession;
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_BILLING_PORTAL_CREATED',
+      entityType: 'Tenant',
+      entityId: id,
+      summary: `Platform admin opened billing portal for ${tenant.businessName}`,
+      metadata: { customerId: tenant.stripeCustomerId },
+    });
+
+    return { provider: 'stripe', sessionId: session.id, url: session.url };
+  }
+
+  async markMockBillingSucceeded(id: string) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id } });
+    const monthlyPriceCents = tenant.monthlyPriceCents ?? 29900;
+    const setupFeeCents = tenant.setupFeeCents ?? 0;
+    const now = new Date();
+    const nextMonth = new Date(now);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.tenant.update({
+        where: { id },
+        data: {
+          status: TenantStatus.ACTIVE,
+          subscriptionStatus: SubscriptionStatus.ACTIVE,
+          stripeCustomerId: tenant.stripeCustomerId ?? `mock_cus_${id}`,
+          stripeSubscriptionId: tenant.stripeSubscriptionId ?? `mock_sub_${id}`,
+          currentPeriodEnd: nextMonth,
+          nextBillingAt: nextMonth,
+          pastDueAt: null,
+          canceledAt: null,
+        },
+      });
+      if (setupFeeCents > 0) {
+        await tx.platformBillingEvent.create({
+          data: {
+            tenantId: id,
+            type: BillingEventType.SETUP_FEE_PAID,
+            amountCents: setupFeeCents,
+            provider: 'mock',
+            providerEventId: `mock_setup_${id}_${Date.now()}`,
+            note: 'Mock setup fee paid.',
+          },
+        });
+      }
+      await tx.platformBillingEvent.create({
+        data: {
+          tenantId: id,
+          type: BillingEventType.SUBSCRIPTION_STARTED,
+          amountCents: monthlyPriceCents,
+          provider: 'mock',
+          providerEventId: `mock_subscription_${id}_${Date.now()}`,
+          note: 'Mock subscription started.',
+        },
+      });
+    });
+
+    return {
+      status: 'ok',
+      tenantId: id,
+      subscriptionStatus: SubscriptionStatus.ACTIVE,
     };
   }
 
@@ -467,6 +662,118 @@ export class PlatformService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
+  }
+
+  private async createStripeSubscriptionCheckout(input: {
+    tenant: Tenant;
+    monthlyPriceCents: number;
+    setupFeeCents: number;
+    successUrl?: string;
+    cancelUrl?: string;
+  }) {
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (!secret) {
+      throw new BadRequestException('STRIPE_SECRET_KEY is not configured');
+    }
+
+    const apiBase = process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api';
+    const successUrl =
+      input.successUrl ??
+      process.env.PLATFORM_BILLING_SUCCESS_URL ??
+      `${apiBase.replace('/api', '')}/admin?billing=success`;
+    const cancelUrl =
+      input.cancelUrl ??
+      process.env.PLATFORM_BILLING_CANCEL_URL ??
+      `${apiBase.replace('/api', '')}/admin?billing=cancel`;
+
+    const params = new URLSearchParams();
+    params.set('mode', 'subscription');
+    params.set('success_url', successUrl);
+    params.set('cancel_url', cancelUrl);
+    params.set('client_reference_id', input.tenant.id);
+    if (input.tenant.billingEmail) {
+      params.set('customer_email', input.tenant.billingEmail);
+    }
+    if (input.tenant.stripeCustomerId) {
+      params.delete('customer_email');
+      params.set('customer', input.tenant.stripeCustomerId);
+    }
+    params.set('metadata[kind]', 'platform_subscription');
+    params.set('metadata[tenantId]', input.tenant.id);
+    params.set('metadata[monthlyPriceCents]', input.monthlyPriceCents.toString());
+    params.set('metadata[setupFeeCents]', input.setupFeeCents.toString());
+    params.set('subscription_data[metadata][kind]', 'platform_subscription');
+    params.set('subscription_data[metadata][tenantId]', input.tenant.id);
+    params.set(
+      'subscription_data[metadata][monthlyPriceCents]',
+      input.monthlyPriceCents.toString(),
+    );
+    params.set(
+      'subscription_data[metadata][setupFeeCents]',
+      input.setupFeeCents.toString(),
+    );
+    params.set('line_items[0][quantity]', '1');
+    params.set('line_items[0][price_data][currency]', 'usd');
+    params.set(
+      'line_items[0][price_data][unit_amount]',
+      input.monthlyPriceCents.toString(),
+    );
+    params.set('line_items[0][price_data][recurring][interval]', 'month');
+    params.set(
+      'line_items[0][price_data][product_data][name]',
+      `${input.tenant.businessName} CrewFlow subscription`,
+    );
+
+    if (input.setupFeeCents > 0) {
+      params.set('line_items[1][quantity]', '1');
+      params.set('line_items[1][price_data][currency]', 'usd');
+      params.set(
+        'line_items[1][price_data][unit_amount]',
+        input.setupFeeCents.toString(),
+      );
+      params.set(
+        'line_items[1][price_data][product_data][name]',
+        `${input.tenant.businessName} CrewFlow setup`,
+      );
+    }
+
+    const response = await fetch(
+      'https://api.stripe.com/v1/checkout/sessions',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: params,
+      },
+    );
+
+    if (!response.ok) {
+      throw new BadRequestException(await response.text());
+    }
+
+    const session = (await response.json()) as StripeCheckoutSession;
+    return {
+      provider: 'stripe',
+      mock: false,
+      url: session.url ?? null,
+      sessionId: session.id,
+      customerId: session.customer,
+      subscriptionId: session.subscription,
+    };
+  }
+
+  private createMockSubscriptionCheckout(tenantId: string) {
+    const apiBase = process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api';
+    return {
+      provider: 'mock',
+      mock: true,
+      url: `${apiBase}/platform/mock-billing/${tenantId}/success`,
+      sessionId: `mock_platform_${tenantId}_${Date.now()}`,
+      customerId: `mock_cus_${tenantId}`,
+      subscriptionId: `mock_sub_${tenantId}`,
+    };
   }
 
   private async applyBillingEventToTenant(

@@ -6,12 +6,15 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  BillingEventType,
   InvoiceStatus,
   MessageDirection,
   MessageProvider,
   PaymentProvider,
   PaymentStatus,
   Prisma,
+  SubscriptionStatus,
+  TenantStatus,
   WebhookEventStatus,
   WebhookProvider,
 } from '@prisma/client';
@@ -283,7 +286,65 @@ export class PaymentsService {
     });
 
     try {
-      if (this.stringField(body, 'type') !== 'checkout.session.completed') {
+      const eventType = this.stringField(body, 'type');
+      const data = this.asRecord(body.data);
+      const stripeObject = this.asRecord(data.object);
+
+      if (eventType?.startsWith('invoice.')) {
+        const tenantId = await this.resolvePlatformTenantFromStripeObject(
+          stripeObject,
+        );
+        if (tenantId) {
+          await this.applyPlatformInvoiceEvent({
+            tenantId,
+            eventType,
+            providerEventId,
+            stripeObject,
+          });
+          return this.prisma.webhookEvent.update({
+            where: { id: event.id },
+            data: {
+              tenantId,
+              status: WebhookEventStatus.PROCESSED,
+              processedAt: new Date(),
+            },
+          });
+        }
+      }
+
+      if (eventType === 'customer.subscription.deleted') {
+        const tenantId = await this.resolvePlatformTenantFromStripeObject(
+          stripeObject,
+        );
+        if (tenantId) {
+          await this.prisma.tenant.update({
+            where: { id: tenantId },
+            data: {
+              status: TenantStatus.CHURNED,
+              subscriptionStatus: SubscriptionStatus.CANCELED,
+              canceledAt: new Date(),
+            },
+          });
+          await this.recordPlatformBillingEventOnce({
+            tenantId,
+            type: BillingEventType.CANCELED,
+            providerEventId,
+            amountCents: null,
+            note: 'Stripe subscription canceled.',
+            metadata: stripeObject,
+          });
+          return this.prisma.webhookEvent.update({
+            where: { id: event.id },
+            data: {
+              tenantId,
+              status: WebhookEventStatus.PROCESSED,
+              processedAt: new Date(),
+            },
+          });
+        }
+      }
+
+      if (eventType !== 'checkout.session.completed') {
         return this.prisma.webhookEvent.update({
           where: { id: event.id },
           data: {
@@ -293,9 +354,29 @@ export class PaymentsService {
         });
       }
 
-      const data = this.asRecord(body.data);
-      const session = this.asRecord(data.object);
+      const session = stripeObject;
       const metadata = this.asRecord(session.metadata);
+      if (this.stringField(metadata, 'kind') === 'platform_subscription') {
+        const tenantId = this.stringField(metadata, 'tenantId');
+        if (!tenantId) {
+          throw new Error('Stripe platform checkout missing tenantId');
+        }
+        await this.completePlatformCheckout({
+          tenantId,
+          providerEventId,
+          session,
+          metadata,
+        });
+        return this.prisma.webhookEvent.update({
+          where: { id: event.id },
+          data: {
+            tenantId,
+            status: WebhookEventStatus.PROCESSED,
+            processedAt: new Date(),
+          },
+        });
+      }
+
       const paymentId = this.stringField(metadata, 'paymentId');
       const sessionId = this.stringField(session, 'id');
 
@@ -401,6 +482,191 @@ export class PaymentsService {
     });
 
     return { message, provider: result };
+  }
+
+  private async completePlatformCheckout(input: {
+    tenantId: string;
+    providerEventId: string;
+    session: Record<string, unknown>;
+    metadata: Record<string, unknown>;
+  }) {
+    const monthlyPriceCents =
+      this.numberFromString(input.metadata, 'monthlyPriceCents') ??
+      this.numberField(input.session, 'amount_subtotal') ??
+      0;
+    const setupFeeCents =
+      this.numberFromString(input.metadata, 'setupFeeCents') ?? 0;
+    const now = new Date();
+    const nextMonth = new Date(now);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.tenant.update({
+        where: { id: input.tenantId },
+        data: {
+          status: TenantStatus.ACTIVE,
+          subscriptionStatus: SubscriptionStatus.ACTIVE,
+          stripeCustomerId: this.stringField(input.session, 'customer'),
+          stripeSubscriptionId: this.stringField(input.session, 'subscription'),
+          monthlyPriceCents: monthlyPriceCents || undefined,
+          setupFeeCents: setupFeeCents || undefined,
+          currentPeriodEnd: nextMonth,
+          nextBillingAt: nextMonth,
+          pastDueAt: null,
+          canceledAt: null,
+        },
+      });
+
+      if (setupFeeCents > 0) {
+        const existingSetup = await tx.platformBillingEvent.findFirst({
+          where: {
+            tenantId: input.tenantId,
+            providerEventId: `${input.providerEventId}:setup`,
+          },
+        });
+        if (!existingSetup) {
+          await tx.platformBillingEvent.create({
+            data: {
+              tenantId: input.tenantId,
+              type: BillingEventType.SETUP_FEE_PAID,
+              amountCents: setupFeeCents,
+              provider: 'stripe',
+              providerEventId: `${input.providerEventId}:setup`,
+              note: 'Stripe setup fee paid.',
+              metadata: input.session as Prisma.InputJsonValue,
+            },
+          });
+        }
+      }
+
+      const existingSubscription = await tx.platformBillingEvent.findFirst({
+        where: {
+          tenantId: input.tenantId,
+          providerEventId: `${input.providerEventId}:subscription`,
+        },
+      });
+      if (!existingSubscription) {
+        await tx.platformBillingEvent.create({
+          data: {
+            tenantId: input.tenantId,
+            type: BillingEventType.SUBSCRIPTION_STARTED,
+            amountCents: monthlyPriceCents || null,
+            provider: 'stripe',
+            providerEventId: `${input.providerEventId}:subscription`,
+            note: 'Stripe subscription checkout completed.',
+            metadata: input.session as Prisma.InputJsonValue,
+          },
+        });
+      }
+    });
+  }
+
+  private async applyPlatformInvoiceEvent(input: {
+    tenantId: string;
+    eventType: string;
+    providerEventId: string;
+    stripeObject: Record<string, unknown>;
+  }) {
+    const amountPaid =
+      this.numberField(input.stripeObject, 'amount_paid') ??
+      this.numberField(input.stripeObject, 'amount_due');
+    const periodEnd = this.periodEndFromInvoice(input.stripeObject);
+
+    if (input.eventType === 'invoice.payment_succeeded') {
+      await this.prisma.tenant.update({
+        where: { id: input.tenantId },
+        data: {
+          status: TenantStatus.ACTIVE,
+          subscriptionStatus: SubscriptionStatus.ACTIVE,
+          currentPeriodEnd: periodEnd,
+          nextBillingAt: periodEnd,
+          pastDueAt: null,
+          canceledAt: null,
+        },
+      });
+      await this.recordPlatformBillingEventOnce({
+        tenantId: input.tenantId,
+        type: BillingEventType.SUBSCRIPTION_RENEWED,
+        providerEventId: input.providerEventId,
+        amountCents: amountPaid ?? null,
+        note: 'Stripe subscription invoice paid.',
+        metadata: input.stripeObject,
+      });
+      return;
+    }
+
+    if (input.eventType === 'invoice.payment_failed') {
+      await this.prisma.tenant.update({
+        where: { id: input.tenantId },
+        data: {
+          subscriptionStatus: SubscriptionStatus.PAST_DUE,
+          pastDueAt: new Date(),
+        },
+      });
+      await this.recordPlatformBillingEventOnce({
+        tenantId: input.tenantId,
+        type: BillingEventType.PAYMENT_FAILED,
+        providerEventId: input.providerEventId,
+        amountCents: amountPaid ?? null,
+        note: 'Stripe subscription invoice payment failed.',
+        metadata: input.stripeObject,
+      });
+    }
+  }
+
+  private async recordPlatformBillingEventOnce(input: {
+    tenantId: string;
+    type: BillingEventType;
+    providerEventId: string;
+    amountCents?: number | null;
+    note: string;
+    metadata: Record<string, unknown>;
+  }) {
+    const existing = await this.prisma.platformBillingEvent.findFirst({
+      where: {
+        tenantId: input.tenantId,
+        providerEventId: input.providerEventId,
+      },
+    });
+    if (existing) {
+      return existing;
+    }
+    return this.prisma.platformBillingEvent.create({
+      data: {
+        tenantId: input.tenantId,
+        type: input.type,
+        amountCents: input.amountCents,
+        provider: 'stripe',
+        providerEventId: input.providerEventId,
+        note: input.note,
+        metadata: input.metadata as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  private async resolvePlatformTenantFromStripeObject(
+    value: Record<string, unknown>,
+  ) {
+    const metadata = this.asRecord(value.metadata);
+    const subscriptionDetails = this.asRecord(value.subscription_details);
+    const subscriptionMetadata = this.asRecord(subscriptionDetails.metadata);
+    const tenantId =
+      this.stringField(metadata, 'tenantId') ??
+      this.stringField(subscriptionMetadata, 'tenantId');
+    if (tenantId) {
+      return tenantId;
+    }
+
+    const subscriptionId =
+      this.stringField(value, 'subscription') ?? this.stringField(value, 'id');
+    if (!subscriptionId) {
+      return null;
+    }
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { stripeSubscriptionId: subscriptionId },
+      select: { id: true },
+    });
+    return tenant?.id ?? null;
   }
 
   private async completePayment(input: {
@@ -558,5 +824,36 @@ export class PaymentsService {
     key: string,
   ): string | undefined {
     return typeof value[key] === 'string' ? value[key] : undefined;
+  }
+
+  private numberField(
+    value: Record<string, unknown>,
+    key: string,
+  ): number | undefined {
+    return typeof value[key] === 'number' ? value[key] : undefined;
+  }
+
+  private numberFromString(
+    value: Record<string, unknown>,
+    key: string,
+  ): number | undefined {
+    const field = value[key];
+    if (typeof field === 'number') {
+      return field;
+    }
+    if (typeof field !== 'string') {
+      return undefined;
+    }
+    const parsed = Number(field);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private periodEndFromInvoice(value: Record<string, unknown>) {
+    const lines = this.asRecord(value.lines);
+    const lineData = Array.isArray(lines.data) ? lines.data : [];
+    const firstLine = this.asRecord(lineData[0]);
+    const period = this.asRecord(firstLine.period);
+    const end = this.numberField(period, 'end');
+    return end ? new Date(end * 1000) : undefined;
   }
 }

@@ -98,4 +98,12 @@ billing="$(
 )"
 echo "billing: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.subscriptionStatus} collected=${j.collectedCents} events=${j.events.length}`)' "$billing")"
 
+checkout="$(
+  curl -fsS -X POST "$API_URL/platform/tenants/$tenant_id/billing/checkout" \
+    -H "Authorization: Bearer $admin_token" \
+    -H 'Content-Type: application/json' \
+    -d '{"collectSetupFee":false}'
+)"
+echo "billing checkout: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.provider} ${j.sessionId}`)' "$checkout")"
+
 echo "smoke: passed"
