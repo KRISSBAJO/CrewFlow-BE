@@ -78,7 +78,10 @@ export class CreateBookingDto {
   @IsString()
   notes?: string;
 
-  @ApiPropertyOptional({ example: 'weekly', enum: ['none', 'weekly', 'biweekly', 'monthly'] })
+  @ApiPropertyOptional({
+    example: 'weekly',
+    enum: ['none', 'weekly', 'biweekly', 'monthly'],
+  })
   @IsOptional()
   @IsIn(['none', 'weekly', 'biweekly', 'monthly'])
   repeatFrequency?: 'none' | 'weekly' | 'biweekly' | 'monthly';

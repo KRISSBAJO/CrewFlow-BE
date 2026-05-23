@@ -9,6 +9,7 @@
 - [ ] `yarn build`
 - [ ] `./scripts/smoke.sh`
 - [ ] Swagger opens at `/api/docs`
+- [ ] Readiness opens at `/api/health/readiness`
 - [ ] Frontend `NEXT_PUBLIC_API_URL` points to the backend
 
 ## Production Environment
@@ -20,6 +21,7 @@ Required:
 - [ ] `JWT_EXPIRES_IN`
 - [ ] `PORT`
 - [ ] `CORS_ORIGIN`
+- [ ] `PUBLIC_API_URL`
 
 Recommended:
 
@@ -56,8 +58,10 @@ Payments:
 - Run migrations before serving traffic: `yarn prisma:migrate` or your platform migration command.
 - Serve the compiled backend with `yarn start:prod`.
 - Do not run demo seed against a production customer database.
+- Demo seed is blocked in `NODE_ENV=production` unless `ALLOW_DEMO_SEED=true`.
 - Use a long random `JWT_SECRET`.
 - Set `CORS_ORIGIN` to the deployed frontend URL.
+- Set `PUBLIC_API_URL` to the deployed backend URL.
 - Keep `WHATSAPP_APP_SECRET` set in production so webhook signatures are enforced.
 - Keep `STRIPE_WEBHOOK_SECRET` set in production so Stripe signatures are enforced.
 - Use the Settings WhatsApp panel after deployment to confirm credentials and webhook events.
@@ -70,6 +74,7 @@ API_URL=https://your-api.example.com/api ./scripts/smoke.sh
 
 Then verify:
 
+- [ ] `/api/health/readiness` returns `status: ok`
 - [ ] Login works
 - [ ] Dashboard loads
 - [ ] Receptionist simulator creates an intake

@@ -11,4 +11,9 @@ export class HealthController {
   check() {
     return this.health.check();
   }
+
+  @Get('readiness')
+  readiness() {
+    return this.health.readiness();
+  }
 }

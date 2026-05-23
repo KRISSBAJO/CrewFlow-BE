@@ -1,6 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { SubscriptionStatus, TenantStatus } from '@prisma/client';
-import { IsDateString, IsEnum, IsInt, IsObject, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 
 export class UpdateTenantStatusDto {
   @ApiPropertyOptional({ enum: TenantStatus, example: TenantStatus.ACTIVE })
@@ -8,7 +16,10 @@ export class UpdateTenantStatusDto {
   @IsEnum(TenantStatus)
   status?: TenantStatus;
 
-  @ApiPropertyOptional({ enum: SubscriptionStatus, example: SubscriptionStatus.ACTIVE })
+  @ApiPropertyOptional({
+    enum: SubscriptionStatus,
+    example: SubscriptionStatus.ACTIVE,
+  })
   @IsOptional()
   @IsEnum(SubscriptionStatus)
   subscriptionStatus?: SubscriptionStatus;

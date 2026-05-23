@@ -13,6 +13,9 @@ echo "API: $API_URL"
 health="$(curl -fsS "$API_URL/health")"
 echo "health: $health"
 
+readiness="$(curl -fsS "$API_URL/health/readiness")"
+echo "readiness: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.status} productionReady=${j.productionReady} warnings=${j.warnings.length}`)' "$readiness")"
+
 token="$(
   curl -fsS -X POST "$API_URL/auth/login" \
     -H 'Content-Type: application/json' \

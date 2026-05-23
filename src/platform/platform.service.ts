@@ -3,7 +3,6 @@ import {
   ActionStatus,
   AutomationRunStatus,
   BillingEventType,
-  BookingStatus,
   LeadStatus,
   InvoiceStatus,
   Prisma,
@@ -62,7 +61,9 @@ export class PlatformService {
       this.prisma.booking.count(),
       this.prisma.lead.count(),
       this.prisma.operationalAction.count({
-        where: { status: { in: [ActionStatus.OPEN, ActionStatus.IN_PROGRESS] } },
+        where: {
+          status: { in: [ActionStatus.OPEN, ActionStatus.IN_PROGRESS] },
+        },
       }),
       this.prisma.automationRun.count({
         where: { status: AutomationRunStatus.FAILED },
@@ -128,7 +129,13 @@ export class PlatformService {
       where: { id },
       include: {
         users: {
-          select: { id: true, name: true, email: true, role: true, active: true },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            active: true,
+          },
           orderBy: { createdAt: 'asc' },
         },
         receptionistConfig: true,
@@ -159,8 +166,12 @@ export class PlatformService {
         setupFeeCents: dto.setupFeeCents,
         subscriptionStatus: dto.subscriptionStatus,
         trialEndsAt: dto.trialEndsAt ? new Date(dto.trialEndsAt) : undefined,
-        currentPeriodEnd: dto.currentPeriodEnd ? new Date(dto.currentPeriodEnd) : undefined,
-        nextBillingAt: dto.nextBillingAt ? new Date(dto.nextBillingAt) : undefined,
+        currentPeriodEnd: dto.currentPeriodEnd
+          ? new Date(dto.currentPeriodEnd)
+          : undefined,
+        nextBillingAt: dto.nextBillingAt
+          ? new Date(dto.nextBillingAt)
+          : undefined,
         stripeCustomerId: dto.stripeCustomerId,
         stripeSubscriptionId: dto.stripeSubscriptionId,
         pastDueAt:
@@ -313,11 +324,7 @@ export class PlatformService {
     });
   }
 
-  async addSupportNote(
-    user: AuthUser,
-    id: string,
-    dto: CreateSupportNoteDto,
-  ) {
+  async addSupportNote(user: AuthUser, id: string, dto: CreateSupportNoteDto) {
     const note = await this.prisma.platformSupportNote.create({
       data: {
         tenantId: id,
@@ -403,10 +410,11 @@ export class PlatformService {
       }),
     ]);
     const collectedCents = events
-      .filter((event) =>
-        event.type === BillingEventType.SETUP_FEE_PAID ||
-        event.type === BillingEventType.SUBSCRIPTION_STARTED ||
-        event.type === BillingEventType.SUBSCRIPTION_RENEWED,
+      .filter(
+        (event) =>
+          event.type === BillingEventType.SETUP_FEE_PAID ||
+          event.type === BillingEventType.SUBSCRIPTION_STARTED ||
+          event.type === BillingEventType.SUBSCRIPTION_RENEWED,
       )
       .reduce((sum, event) => sum + (event.amountCents ?? 0), 0);
     const failedCount = events.filter(
@@ -509,9 +517,13 @@ export class PlatformService {
   }
 
   async createBillingPortal(user: AuthUser, id: string) {
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id } });
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id },
+    });
     if (!tenant.stripeCustomerId) {
-      throw new BadRequestException('Tenant does not have a Stripe customer yet');
+      throw new BadRequestException(
+        'Tenant does not have a Stripe customer yet',
+      );
     }
     const secret = process.env.STRIPE_SECRET_KEY;
     if (!secret) {
@@ -558,7 +570,9 @@ export class PlatformService {
   }
 
   async markMockBillingSucceeded(id: string) {
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id } });
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id },
+    });
     const monthlyPriceCents = tenant.monthlyPriceCents ?? 29900;
     const setupFeeCents = tenant.setupFeeCents ?? 0;
     const now = new Date();
@@ -633,7 +647,11 @@ export class PlatformService {
       entityType: 'Tenant',
       entityId: id,
       summary: 'Platform admin created an audited support access token',
-      metadata: { tenantId: id, reason: dto.reason, expiresAt: access.expiresAt },
+      metadata: {
+        tenantId: id,
+        reason: dto.reason,
+        expiresAt: access.expiresAt,
+      },
     });
     return access;
   }
@@ -658,7 +676,10 @@ export class PlatformService {
 
   auditLogs() {
     return this.prisma.auditLog.findMany({
-      include: { tenant: true, actor: { select: { id: true, email: true, role: true } } },
+      include: {
+        tenant: true,
+        actor: { select: { id: true, email: true, role: true } },
+      },
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
@@ -700,7 +721,10 @@ export class PlatformService {
     }
     params.set('metadata[kind]', 'platform_subscription');
     params.set('metadata[tenantId]', input.tenant.id);
-    params.set('metadata[monthlyPriceCents]', input.monthlyPriceCents.toString());
+    params.set(
+      'metadata[monthlyPriceCents]',
+      input.monthlyPriceCents.toString(),
+    );
     params.set('metadata[setupFeeCents]', input.setupFeeCents.toString());
     params.set('subscription_data[metadata][kind]', 'platform_subscription');
     params.set('subscription_data[metadata][tenantId]', input.tenant.id);

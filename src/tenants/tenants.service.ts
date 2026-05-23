@@ -1,5 +1,15 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
-import { BillingEventType, Prisma, SubscriptionStatus, Tenant, TenantStatus, UserRole } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
+import {
+  BillingEventType,
+  Prisma,
+  SubscriptionStatus,
+  Tenant,
+  UserRole,
+} from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/current-user.decorator';
@@ -122,28 +132,36 @@ export class TenantsService {
       {
         id: 'service_catalog',
         label: 'Service catalog',
-        detail: services ? `${services} services active` : 'Add at least one service',
+        detail: services
+          ? `${services} services active`
+          : 'Add at least one service',
         done: services > 0,
         target: 'settings',
       },
       {
         id: 'staff_ready',
         label: 'Staff ready',
-        detail: staff ? `${staff} users active` : 'Invite owner, managers, or staff',
+        detail: staff
+          ? `${staff} users active`
+          : 'Invite owner, managers, or staff',
         done: staff > 0,
         target: 'settings',
       },
       {
         id: 'customer_base',
         label: 'Customer base',
-        detail: customers ? `${customers} customers loaded` : 'Add or import customers',
+        detail: customers
+          ? `${customers} customers loaded`
+          : 'Add or import customers',
         done: customers > 0,
         target: 'customers',
       },
       {
         id: 'first_booking',
         label: 'First booking',
-        detail: bookings ? `${bookings} bookings created` : 'Create a test or real booking',
+        detail: bookings
+          ? `${bookings} bookings created`
+          : 'Create a test or real booking',
         done: bookings > 0,
         target: 'bookings',
       },
@@ -187,7 +205,14 @@ export class TenantsService {
       launchReady: score === 100,
       nextStep,
       steps,
-      counts: { services, staff, customers, bookings, automationRules, billingEvents },
+      counts: {
+        services,
+        staff,
+        customers,
+        bookings,
+        automationRules,
+        billingEvents,
+      },
       biggestProblem: onboarding?.biggestProblem,
     };
   }
@@ -200,7 +225,9 @@ export class TenantsService {
       const tenant = await tx.tenant.update({
         where: { id: tenantId },
         data: {
-          ...(dto.businessName ? { businessName: dto.businessName.trim() } : {}),
+          ...(dto.businessName
+            ? { businessName: dto.businessName.trim() }
+            : {}),
           ...(dto.industry ? { industry: dto.industry.trim() } : {}),
         },
         select: {
@@ -474,7 +501,10 @@ export class TenantsService {
     params.set('subscription_data[metadata][tenantId]', tenant.id);
     params.set('line_items[0][quantity]', '1');
     params.set('line_items[0][price_data][currency]', 'usd');
-    params.set('line_items[0][price_data][unit_amount]', monthlyPriceCents.toString());
+    params.set(
+      'line_items[0][price_data][unit_amount]',
+      monthlyPriceCents.toString(),
+    );
     params.set('line_items[0][price_data][recurring][interval]', 'month');
     params.set(
       'line_items[0][price_data][product_data][name]',
@@ -495,7 +525,12 @@ export class TenantsService {
       throw new BadRequestException(await response.text());
     }
     const session = (await response.json()) as { id: string; url?: string };
-    return { provider: 'stripe', mock: false, sessionId: session.id, url: session.url };
+    return {
+      provider: 'stripe',
+      mock: false,
+      sessionId: session.id,
+      url: session.url,
+    };
   }
 
   private createMockSubscriptionCheckout(tenantId: string) {

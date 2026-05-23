@@ -58,7 +58,10 @@ export class RetentionService {
         await this.upsertAction({
           tenantId,
           type: ActionType.SUGGEST_REPEAT_BOOKING,
-          priority: candidate.daysSinceLastBooking >= 21 ? ActionPriority.HIGH : ActionPriority.MEDIUM,
+          priority:
+            candidate.daysSinceLastBooking >= 21
+              ? ActionPriority.HIGH
+              : ActionPriority.MEDIUM,
           title: `Suggest repeat booking for ${candidate.customer.name}`,
           description: `${candidate.customer.name} last booked ${candidate.serviceTitle}. Offer a convenient repeat appointment.`,
           customerId: candidate.customer.id,
@@ -85,7 +88,10 @@ export class RetentionService {
         await this.upsertAction({
           tenantId,
           type: ActionType.WIN_BACK_CUSTOMER,
-          priority: candidate.lifetimeValueCents >= 50000 ? ActionPriority.HIGH : ActionPriority.MEDIUM,
+          priority:
+            candidate.lifetimeValueCents >= 50000
+              ? ActionPriority.HIGH
+              : ActionPriority.MEDIUM,
           title: `Win back ${candidate.customer.name}`,
           description: `${candidate.customer.name} has been inactive for ${candidate.daysSinceLastBooking} days. Send a personal follow-up.`,
           customerId: candidate.customer.id,
@@ -204,7 +210,9 @@ export class RetentionService {
       const completed = customer.bookings.filter(
         (booking) => booking.status === BookingStatus.COMPLETED,
       );
-      const lastBooking = completed[0] ?? customer.bookings.find((booking) => booking.startTime <= now);
+      const lastBooking =
+        completed[0] ??
+        customer.bookings.find((booking) => booking.startTime <= now);
       const futureBooking = customer.bookings.find(
         (booking) =>
           booking.startTime > now &&
@@ -215,16 +223,19 @@ export class RetentionService {
         .filter((invoice) => invoice.status === InvoiceStatus.PAID)
         .reduce((sum, invoice) => sum + invoice.totalCents, 0);
       const openInvoiceCents = customer.invoices
-        .filter((invoice) =>
-          invoice.status === InvoiceStatus.SENT ||
-          invoice.status === InvoiceStatus.OVERDUE,
+        .filter(
+          (invoice) =>
+            invoice.status === InvoiceStatus.SENT ||
+            invoice.status === InvoiceStatus.OVERDUE,
         )
         .reduce((sum, invoice) => sum + invoice.totalCents, 0);
       const estimatedNextValueCents =
         lastBooking?.service.priceCents ??
         Math.round(paidTotalCents / Math.max(1, completed.length || 1));
       const daysSinceLastBooking = lastBooking
-        ? Math.floor((now.getTime() - lastBooking.startTime.getTime()) / 86_400_000)
+        ? Math.floor(
+            (now.getTime() - lastBooking.startTime.getTime()) / 86_400_000,
+          )
         : 9999;
 
       return {

@@ -468,7 +468,7 @@ export class WorkflowsService {
         planLimits: true,
       },
     });
-    const usage = await this.billingUsage(tenantId);
+    const usage: Record<string, number> = await this.billingUsage(tenantId);
     const limits = this.asPlanLimits(tenant.planLimits);
     const actions: unknown[] = [];
 
@@ -483,7 +483,8 @@ export class WorkflowsService {
         await this.upsertAction({
           tenantId,
           type: ActionType.COLLECT_PAYMENT,
-          priority: daysPastDue >= 7 ? ActionPriority.URGENT : ActionPriority.HIGH,
+          priority:
+            daysPastDue >= 7 ? ActionPriority.URGENT : ActionPriority.HIGH,
           title: 'Recover past-due CrewFlow subscription',
           description:
             'Billing is past due. Contact the owner, update payment details, or pause risky expansion until payment is recovered.',
@@ -534,7 +535,8 @@ export class WorkflowsService {
           await this.upsertAction({
             tenantId,
             type: ActionType.COLLECT_PAYMENT,
-            priority: used >= limit ? ActionPriority.HIGH : ActionPriority.MEDIUM,
+            priority:
+              used >= limit ? ActionPriority.HIGH : ActionPriority.MEDIUM,
             title:
               used >= limit
                 ? `Plan limit reached: ${this.humanizeLimit(key)}`
@@ -712,14 +714,15 @@ export class WorkflowsService {
     if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
       const data = metadata as Record<string, unknown>;
       const kind = typeof data.kind === 'string' ? data.kind : null;
-      const limitKey =
-        typeof data.limitKey === 'string' ? data.limitKey : null;
+      const limitKey = typeof data.limitKey === 'string' ? data.limitKey : null;
       return [kind, limitKey].filter(Boolean).join(':') || null;
     }
     return null;
   }
 
-  private async billingUsage(tenantId: string) {
+  private async billingUsage(
+    tenantId: string,
+  ): Promise<Record<string, number>> {
     const now = new Date();
     const monthStart = new Date(now);
     monthStart.setDate(1);

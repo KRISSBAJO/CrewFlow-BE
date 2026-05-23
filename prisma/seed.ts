@@ -20,6 +20,12 @@ import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
 async function main() {
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEMO_SEED !== 'true') {
+    throw new Error(
+      'Refusing to run demo seed in production. Set ALLOW_DEMO_SEED=true only for disposable production-like environments.',
+    );
+  }
+
   const passwordHash = await bcrypt.hash('Password123!', 12);
 
   const platformTenant = await prisma.tenant.upsert({

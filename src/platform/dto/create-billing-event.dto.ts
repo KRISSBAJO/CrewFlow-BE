@@ -1,9 +1,19 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BillingEventType } from '@prisma/client';
-import { IsEnum, IsInt, IsObject, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 
 export class CreateBillingEventDto {
-  @ApiProperty({ enum: BillingEventType, example: BillingEventType.SUBSCRIPTION_RENEWED })
+  @ApiProperty({
+    enum: BillingEventType,
+    example: BillingEventType.SUBSCRIPTION_RENEWED,
+  })
   @IsEnum(BillingEventType)
   type: BillingEventType;
 

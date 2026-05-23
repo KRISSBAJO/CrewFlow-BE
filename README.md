@@ -33,6 +33,7 @@ Default URLs:
 API:     http://localhost:3002/api
 Swagger: http://localhost:3002/api/docs
 Health:  http://localhost:3002/api/health
+Ready:   http://localhost:3002/api/health/readiness
 ```
 
 Demo login:
@@ -99,6 +100,7 @@ Operations:
 - `RATE_LIMIT_MAX`
 - `ENABLE_SCHEDULER`
 - `SCHEDULER_INTERVAL_MS`
+- `ALLOW_DEMO_SEED`
 
 ## Smoke Test
 
@@ -114,7 +116,17 @@ Against a remote API:
 API_URL=https://your-api.example.com/api ./scripts/smoke.sh
 ```
 
-The smoke test checks health, login, dashboard, booking creation, receptionist intake, and WhatsApp readiness.
+The smoke test checks health, production readiness posture, login, dashboard, booking creation, receptionist intake, WhatsApp readiness, billing, activation, leads, retention, actions, and platform admin metrics.
+
+## Production Readiness
+
+Use the readiness endpoint before and after deploys:
+
+```bash
+curl https://your-api.example.com/api/health/readiness
+```
+
+It returns database status, sanitized integration readiness, scheduler status, production warnings, and a `productionReady` boolean without exposing secrets.
 
 ## Demo Data
 
@@ -186,9 +198,11 @@ Read:
 Important:
 
 - Do not run demo seed against production customer data.
+- `yarn seed` refuses to run in `NODE_ENV=production` unless `ALLOW_DEMO_SEED=true`.
 - Use a long random `JWT_SECRET`.
 - Set `CORS_ORIGIN` to your deployed frontend origin.
+- Set `PUBLIC_API_URL` to the public HTTPS API URL.
 - Set `WHATSAPP_APP_SECRET` so WhatsApp webhook signatures are enforced.
 - Set `STRIPE_WEBHOOK_SECRET` so Stripe webhook signatures are enforced.
 - Turn on the scheduler only when you want automated operational scans.
-- Use `/api/health` and `./scripts/smoke.sh` after deployment.
+- Use `/api/health/readiness` and `./scripts/smoke.sh` after deployment.

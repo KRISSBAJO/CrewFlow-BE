@@ -316,7 +316,8 @@ export class LeadsService {
         where: { id: dto.conversationId, tenantId },
         select: { id: true },
       });
-      if (!conversation) throw new BadRequestException('Conversation not found');
+      if (!conversation)
+        throw new BadRequestException('Conversation not found');
     }
     if (dto.assignedToId) {
       const user = await this.prisma.user.findFirst({

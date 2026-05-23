@@ -19,12 +19,16 @@ export class CreatePlatformCheckoutDto {
   @IsBoolean()
   collectSetupFee?: boolean;
 
-  @ApiPropertyOptional({ example: 'https://app.crewflow.ai/admin?billing=success' })
+  @ApiPropertyOptional({
+    example: 'https://app.crewflow.ai/admin?billing=success',
+  })
   @IsOptional()
   @IsString()
   successUrl?: string;
 
-  @ApiPropertyOptional({ example: 'https://app.crewflow.ai/admin?billing=cancel' })
+  @ApiPropertyOptional({
+    example: 'https://app.crewflow.ai/admin?billing=cancel',
+  })
   @IsOptional()
   @IsString()
   cancelUrl?: string;

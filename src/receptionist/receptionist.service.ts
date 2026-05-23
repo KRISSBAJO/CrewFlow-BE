@@ -229,7 +229,9 @@ export class ReceptionistService {
       customerId: customer?.id,
       conversationId: conversation.id,
       bookingIntentId: bookingIntent.id,
-      source: this.leads.sourceFromProvider(dto.channel ?? MessageProvider.WEB_CHAT),
+      source: this.leads.sourceFromProvider(
+        dto.channel ?? MessageProvider.WEB_CHAT,
+      ),
       serviceTitle: matchedService?.title,
       customerName: customer?.name ?? dto.customerName,
       estimatedValueCents: matchedService?.priceCents,

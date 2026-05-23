@@ -36,7 +36,10 @@ export class CustomersService {
         notes: customer.notes?.trim() || undefined,
       }))
       .filter((customer) => customer.name && customer.phone)
-      .slice(0, Math.min(500, Math.max(0, (customerLimit ?? 500) - existingCustomers)));
+      .slice(
+        0,
+        Math.min(500, Math.max(0, (customerLimit ?? 500) - existingCustomers)),
+      );
 
     let created = 0;
     let updated = 0;

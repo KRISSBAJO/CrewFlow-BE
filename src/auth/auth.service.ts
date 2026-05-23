@@ -4,12 +4,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import {
-  AutomationTrigger,
-  MessageProvider,
-  Prisma,
-  UserRole,
-} from '@prisma/client';
+import { AutomationTrigger, MessageProvider, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
@@ -110,7 +105,7 @@ export class AuthService {
           metadata: {
             staffCount: dto.staffCount,
             biggestProblem: dto.biggestProblem,
-          } as Prisma.InputJsonValue,
+          },
         },
       });
 

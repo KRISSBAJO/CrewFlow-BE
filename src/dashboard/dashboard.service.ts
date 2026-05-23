@@ -122,7 +122,9 @@ export class DashboardService {
       this.prisma.bookingIntent.count({
         where: {
           tenantId,
-          status: { in: [BookingIntentStatus.READY, BookingIntentStatus.COLLECTING] },
+          status: {
+            in: [BookingIntentStatus.READY, BookingIntentStatus.COLLECTING],
+          },
           bookingId: null,
         },
       }),
@@ -167,7 +169,10 @@ export class DashboardService {
         where: {
           tenantId,
           status: BookingStatus.COMPLETED,
-          OR: [{ invoice: null }, { invoice: { status: { not: InvoiceStatus.PAID } } }],
+          OR: [
+            { invoice: null },
+            { invoice: { status: { not: InvoiceStatus.PAID } } },
+          ],
         },
       }),
       this.prisma.operationalAction.count({

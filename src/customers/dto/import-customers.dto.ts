@@ -1,6 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsEmail, IsOptional, IsString, ValidateNested } from 'class-validator';
+import {
+  IsArray,
+  IsEmail,
+  IsOptional,
+  IsString,
+  ValidateNested,
+} from 'class-validator';
 
 export class ImportCustomerRowDto {
   @ApiProperty({ example: 'Nia Carter' })
@@ -16,7 +22,10 @@ export class ImportCustomerRowDto {
   @IsEmail()
   email?: string;
 
-  @ApiProperty({ example: 'Recurring customer. Use side entrance.', required: false })
+  @ApiProperty({
+    example: 'Recurring customer. Use side entrance.',
+    required: false,
+  })
   @IsOptional()
   @IsString()
   notes?: string;

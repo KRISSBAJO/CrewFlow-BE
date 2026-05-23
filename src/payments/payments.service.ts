@@ -291,9 +291,8 @@ export class PaymentsService {
       const stripeObject = this.asRecord(data.object);
 
       if (eventType?.startsWith('invoice.')) {
-        const tenantId = await this.resolvePlatformTenantFromStripeObject(
-          stripeObject,
-        );
+        const tenantId =
+          await this.resolvePlatformTenantFromStripeObject(stripeObject);
         if (tenantId) {
           await this.applyPlatformInvoiceEvent({
             tenantId,
@@ -313,9 +312,8 @@ export class PaymentsService {
       }
 
       if (eventType === 'customer.subscription.deleted') {
-        const tenantId = await this.resolvePlatformTenantFromStripeObject(
-          stripeObject,
-        );
+        const tenantId =
+          await this.resolvePlatformTenantFromStripeObject(stripeObject);
         if (tenantId) {
           await this.prisma.tenant.update({
             where: { id: tenantId },

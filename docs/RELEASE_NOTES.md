@@ -23,6 +23,8 @@ This checkpoint covers the CrewFlow backend through the operational money-engine
 - Swagger/OpenAPI docs
 - Demo seed data
 - Launch checklist, demo script, and smoke script
+- Production readiness endpoint with sanitized deployment checks
+- Production environment validation for CORS, public API URL, Stripe, WhatsApp, numeric limits, and seed safety
 
 ### Demo Login
 
@@ -46,4 +48,4 @@ yarn seed
 - Do not run demo seed against production data.
 - Set `WHATSAPP_APP_SECRET` to enforce WhatsApp webhook signatures.
 - Set `STRIPE_WEBHOOK_SECRET` to enforce Stripe webhook signatures.
-- Use `/api/health` and `scripts/smoke.sh` after deployment.
+- Use `/api/health/readiness` and `scripts/smoke.sh` after deployment.
