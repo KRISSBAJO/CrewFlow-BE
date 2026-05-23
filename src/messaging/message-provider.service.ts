@@ -21,6 +21,25 @@ export class MessageProviderService {
 
   constructor(private readonly config: ConfigService) {}
 
+  readiness() {
+    const accessToken = this.config.get<string>('WHATSAPP_ACCESS_TOKEN');
+    const phoneNumberId = this.config.get<string>('WHATSAPP_PHONE_NUMBER_ID');
+    const verifyToken = this.config.get<string>('WHATSAPP_VERIFY_TOKEN');
+    const appSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
+
+    return {
+      mode: accessToken && phoneNumberId ? 'live' : 'mock',
+      ready: Boolean(accessToken && phoneNumberId && verifyToken),
+      checks: {
+        accessToken: Boolean(accessToken),
+        phoneNumberId: Boolean(phoneNumberId),
+        verifyToken: Boolean(verifyToken),
+        appSecret: Boolean(appSecret),
+        signatureVerification: Boolean(appSecret),
+      },
+    };
+  }
+
   async send(input: SendMessageInput): Promise<SendMessageResult> {
     if (input.provider !== MessageProvider.WHATSAPP) {
       return this.mock(input, 'provider_not_configured');

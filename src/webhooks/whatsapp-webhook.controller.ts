@@ -9,13 +9,29 @@ import {
   Res,
 } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import type { Request, Response } from 'express';
+import { CurrentUser } from '../common/current-user.decorator';
+import type { AuthUser } from '../common/current-user.decorator';
 import { Public } from '../common/public.decorator';
+import { Roles } from '../common/roles.decorator';
 import { WhatsappWebhookService } from './whatsapp-webhook.service';
 
 @Controller('webhooks/whatsapp')
 export class WhatsappWebhookController {
   constructor(private readonly webhooks: WhatsappWebhookService) {}
+
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
+  @Get('status')
+  status(@CurrentUser() user: AuthUser) {
+    return this.webhooks.status(user.tenantId);
+  }
+
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
+  @Get('events')
+  events(@CurrentUser() user: AuthUser) {
+    return this.webhooks.events(user.tenantId);
+  }
 
   @Public()
   @Get()

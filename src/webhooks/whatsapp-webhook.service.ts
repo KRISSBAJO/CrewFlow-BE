@@ -8,6 +8,7 @@ import {
   WebhookProvider,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
+import { MessageProviderService } from '../messaging/message-provider.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SignatureService } from '../security/signature.service';
 
@@ -25,7 +26,64 @@ export class WhatsappWebhookService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly signatures: SignatureService,
+    private readonly provider: MessageProviderService,
   ) {}
+
+  async status(tenantId: string) {
+    const [events, inboundMessages, outboundMessages, failedEvents] =
+      await Promise.all([
+        this.prisma.webhookEvent.count({
+          where: { tenantId, provider: WebhookProvider.WHATSAPP },
+        }),
+        this.prisma.messageLog.count({
+          where: {
+            tenantId,
+            provider: MessageProvider.WHATSAPP,
+            direction: MessageDirection.INBOUND,
+          },
+        }),
+        this.prisma.messageLog.count({
+          where: {
+            tenantId,
+            provider: MessageProvider.WHATSAPP,
+            direction: MessageDirection.OUTBOUND,
+          },
+        }),
+        this.prisma.webhookEvent.count({
+          where: {
+            tenantId,
+            provider: WebhookProvider.WHATSAPP,
+            status: WebhookEventStatus.FAILED,
+          },
+        }),
+      ]);
+
+    return {
+      provider: this.provider.readiness(),
+      webhook: {
+        verifyTokenConfigured: Boolean(
+          this.config.get<string>('WHATSAPP_VERIFY_TOKEN'),
+        ),
+        appSecretConfigured: Boolean(
+          this.config.get<string>('WHATSAPP_APP_SECRET'),
+        ),
+        events,
+        failedEvents,
+      },
+      messages: {
+        inbound: inboundMessages,
+        outbound: outboundMessages,
+      },
+    };
+  }
+
+  events(tenantId: string) {
+    return this.prisma.webhookEvent.findMany({
+      where: { tenantId, provider: WebhookProvider.WHATSAPP },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+  }
 
   verify(mode?: string, token?: string) {
     const expected = this.config.get<string>(
