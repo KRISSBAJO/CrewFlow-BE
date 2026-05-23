@@ -1,8 +1,9 @@
 import { ConflictException, Injectable } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { Prisma, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStaffDto } from './dto/create-staff.dto';
+import { UpdateTenantSettingsDto } from './dto/update-tenant-settings.dto';
 
 @Injectable()
 export class TenantsService {
@@ -18,7 +19,94 @@ export class TenantsService {
         industry: true,
         subscriptionPlan: true,
         createdAt: true,
+        onboardingProfile: true,
+        receptionistConfig: {
+          select: {
+            displayName: true,
+            serviceArea: true,
+            businessHours: true,
+            enabled: true,
+          },
+        },
       },
+    });
+  }
+
+  getOnboarding(tenantId: string) {
+    return this.prisma.onboardingProfile.findUniqueOrThrow({
+      where: { tenantId },
+    });
+  }
+
+  async updateSettings(tenantId: string, dto: UpdateTenantSettingsDto) {
+    const completedSteps = this.normalizeCompletedSteps(dto);
+    const setupStatus = completedSteps.length >= 5 ? 'READY' : 'IN_PROGRESS';
+
+    return this.prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.update({
+        where: { id: tenantId },
+        data: {
+          ...(dto.businessName ? { businessName: dto.businessName.trim() } : {}),
+          ...(dto.industry ? { industry: dto.industry.trim() } : {}),
+        },
+        select: {
+          id: true,
+          businessName: true,
+          slug: true,
+          industry: true,
+          subscriptionPlan: true,
+          createdAt: true,
+        },
+      });
+
+      const onboardingProfile = await tx.onboardingProfile.upsert({
+        where: { tenantId },
+        create: {
+          tenantId,
+          ownerName: 'Owner',
+          ownerEmail: 'owner@example.com',
+          whatsappNumber: dto.whatsappNumber?.trim(),
+          staffCount: dto.staffCount?.trim(),
+          biggestProblem: dto.biggestProblem?.trim(),
+          setupStatus,
+          source: 'settings',
+        },
+        update: {
+          whatsappNumber: dto.whatsappNumber?.trim(),
+          staffCount: dto.staffCount?.trim(),
+          biggestProblem: dto.biggestProblem?.trim(),
+          setupStatus,
+        },
+      });
+
+      const receptionistConfig = await tx.receptionistConfig.upsert({
+        where: { tenantId },
+        create: {
+          tenantId,
+          displayName: `${tenant.businessName} Receptionist`,
+          serviceArea: dto.serviceArea?.trim(),
+          businessHours: dto.businessHours as Prisma.InputJsonValue,
+        },
+        update: {
+          serviceArea: dto.serviceArea?.trim(),
+          businessHours: dto.businessHours as Prisma.InputJsonValue,
+        },
+        select: {
+          displayName: true,
+          serviceArea: true,
+          businessHours: true,
+          enabled: true,
+        },
+      });
+
+      return {
+        ...tenant,
+        onboardingProfile: {
+          ...onboardingProfile,
+          completedSteps,
+        },
+        receptionistConfig,
+      };
     });
   }
 
@@ -66,5 +154,19 @@ export class TenantsService {
         active: true,
       },
     });
+  }
+
+  private normalizeCompletedSteps(dto: UpdateTenantSettingsDto): string[] {
+    return [
+      ...new Set([
+        ...(dto.completedSteps ?? []),
+        ...(dto.businessName || dto.industry ? ['businessProfile'] : []),
+        ...(dto.serviceArea || dto.businessHours ? ['operatingDetails'] : []),
+        ...(dto.whatsappNumber || dto.whatsappPlanned
+          ? ['whatsappPlanned']
+          : []),
+        ...(dto.staffCount ? ['staffPlan'] : []),
+      ]),
+    ];
   }
 }
