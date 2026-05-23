@@ -4,6 +4,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateTenantSettingsDto } from './dto/update-tenant-settings.dto';
+import { UpdateStaffDto } from './dto/update-staff.dto';
 
 @Injectable()
 export class TenantsService {
@@ -144,6 +145,41 @@ export class TenantsService {
         phone: dto.phone,
         passwordHash,
         role: dto.role ?? UserRole.STAFF,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        role: true,
+        active: true,
+      },
+    });
+  }
+
+  async updateStaff(tenantId: string, id: string, dto: UpdateStaffDto) {
+    if (dto.email) {
+      const existing = await this.prisma.user.findFirst({
+        where: {
+          tenantId,
+          email: dto.email.toLowerCase(),
+          NOT: { id },
+        },
+      });
+
+      if (existing) {
+        throw new ConflictException('Staff email already exists');
+      }
+    }
+
+    return this.prisma.user.update({
+      where: { id, tenantId },
+      data: {
+        name: dto.name?.trim(),
+        email: dto.email?.toLowerCase(),
+        phone: dto.phone?.trim(),
+        role: dto.role,
+        active: dto.active,
       },
       select: {
         id: true,
