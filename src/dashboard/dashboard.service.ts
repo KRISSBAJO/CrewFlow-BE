@@ -6,6 +6,7 @@ import {
   BookingStatus,
   ConversationStatus,
   InvoiceStatus,
+  LeadStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -33,6 +34,8 @@ export class DashboardService {
       noShows,
       hotLeads,
       staleConversations,
+      staleLeads,
+      hotLeadValue,
       completedUnpaid,
     ] = await Promise.all([
       this.prisma.booking.findMany({
@@ -131,6 +134,30 @@ export class DashboardService {
           lastMessageAt: { lt: this.hoursAgo(4) },
         },
       }),
+      this.prisma.lead.count({
+        where: {
+          tenantId,
+          status: {
+            in: [
+              LeadStatus.NEW,
+              LeadStatus.CONTACTED,
+              LeadStatus.QUALIFIED,
+              LeadStatus.BOOKING_READY,
+            ],
+          },
+          OR: [
+            { followUpAt: { lte: new Date() } },
+            { followUpAt: null, updatedAt: { lt: this.hoursAgo(6) } },
+          ],
+        },
+      }),
+      this.prisma.lead.aggregate({
+        where: {
+          tenantId,
+          status: LeadStatus.BOOKING_READY,
+        },
+        _sum: { estimatedValueCents: true },
+      }),
       this.prisma.booking.count({
         where: {
           tenantId,
@@ -178,6 +205,8 @@ export class DashboardService {
           urgentActionCount: urgentActions.length,
           hotLeads,
           staleConversations,
+          staleLeads,
+          hotLeadValueCents: hotLeadValue._sum.estimatedValueCents ?? 0,
           completedUnpaid,
         }),
       },
@@ -193,6 +222,8 @@ export class DashboardService {
     urgentActionCount: number;
     hotLeads: number;
     staleConversations: number;
+    staleLeads: number;
+    hotLeadValueCents: number;
     completedUnpaid: number;
   }) {
     const alerts: Array<{
@@ -234,6 +265,15 @@ export class DashboardService {
         severity: 'critical',
         title: 'Receptionist leads are not booked yet',
         value: input.hotLeads,
+        amountCents: input.hotLeadValueCents,
+      });
+    }
+    if (input.staleLeads > 0) {
+      alerts.push({
+        key: 'stale-leads',
+        severity: 'critical',
+        title: 'Leads need follow-up today',
+        value: input.staleLeads,
       });
     }
     if (input.completedUnpaid > 0) {

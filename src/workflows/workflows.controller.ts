@@ -54,4 +54,10 @@ export class WorkflowsController {
   scanLostRevenueRisk(@CurrentUser() user: AuthUser) {
     return this.workflows.scanLostRevenueRisk(user);
   }
+
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
+  @Post('workflows/scan-lead-follow-ups')
+  scanLeadFollowUps(@CurrentUser() user: AuthUser) {
+    return this.workflows.scanLeadFollowUps(user);
+  }
 }

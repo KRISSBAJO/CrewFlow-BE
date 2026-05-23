@@ -451,6 +451,11 @@ async function main() {
       template:
         'Thanks for choosing {{businessName}}, {{customerName}}. Could you leave a quick review?',
     },
+    {
+      trigger: AutomationTrigger.LEAD_FOLLOW_UP,
+      template:
+        'Hi {{customerName}}, this is {{businessName}} following up on {{leadTitle}}. Would you like us to help get this scheduled?',
+    },
   ];
 
   for (const rule of automationRules) {

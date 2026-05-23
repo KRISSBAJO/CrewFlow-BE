@@ -49,6 +49,7 @@ enum AutomationTrigger {
   MISSED_APPOINTMENT
   INVOICE_DUE
   REVIEW_REQUEST
+  LEAD_FOLLOW_UP
 }
 
 enum AutomationRunStatus {

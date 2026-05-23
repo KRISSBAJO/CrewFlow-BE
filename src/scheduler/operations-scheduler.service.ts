@@ -11,6 +11,7 @@ import {
   AutomationTrigger,
   BookingStatus,
   InvoiceStatus,
+  LeadStatus,
   Prisma,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
@@ -61,11 +62,12 @@ export class OperationsSchedulerService
   }
 
   async runTenantScans(tenantId: string, source = 'manual') {
-    const [overdue, lostRevenue] = await Promise.all([
+    const [overdue, lostRevenue, leadFollowUps] = await Promise.all([
       this.scanOverdueInvoices(tenantId, source),
       this.scanLostRevenue(tenantId, source),
+      this.scanLeadFollowUps(tenantId, source),
     ]);
-    return { tenantId, overdue, lostRevenue };
+    return { tenantId, overdue, lostRevenue, leadFollowUps };
   }
 
   private async scanOverdueInvoices(tenantId: string, source: string) {
@@ -176,6 +178,80 @@ export class OperationsSchedulerService
     return { unassigned: unassigned.length, requested: requested.length };
   }
 
+  private async scanLeadFollowUps(tenantId: string, source: string) {
+    const now = new Date();
+    const staleCutoff = new Date(now.getTime() - 6 * 60 * 60_000);
+    const leads = await this.prisma.lead.findMany({
+      where: {
+        tenantId,
+        status: {
+          in: [
+            LeadStatus.NEW,
+            LeadStatus.CONTACTED,
+            LeadStatus.QUALIFIED,
+            LeadStatus.BOOKING_READY,
+          ],
+        },
+        OR: [
+          { followUpAt: { lte: now } },
+          {
+            followUpAt: null,
+            updatedAt: { lte: staleCutoff },
+          },
+        ],
+      },
+      include: { customer: true, assignedTo: true },
+      orderBy: [{ followUpAt: 'asc' }, { updatedAt: 'asc' }],
+      take: 100,
+    });
+
+    for (const lead of leads) {
+      await this.upsertAction({
+        tenantId,
+        type: ActionType.FOLLOW_UP_STALE_INQUIRY,
+        priority: this.leadPriority(
+          lead.status,
+          lead.conversionProbability,
+          lead.estimatedValueCents ?? 0,
+        ),
+        title: `Follow up lead: ${lead.title}`,
+        description: `${lead.customer?.name ?? 'A lead'} needs follow-up before the opportunity goes cold.`,
+        customerId: lead.customerId,
+        assignedToId: lead.assignedToId,
+        dueAt: now,
+        metadata: {
+          source,
+          leadId: lead.id,
+          leadStatus: lead.status,
+          estimatedValueCents: lead.estimatedValueCents,
+          conversionProbability: lead.conversionProbability,
+          followUpAt: lead.followUpAt,
+        },
+      });
+
+      if (lead.customerId) {
+        await this.automations.trigger({
+          tenantId,
+          trigger: AutomationTrigger.LEAD_FOLLOW_UP,
+          customerId: lead.customerId,
+          leadId: lead.id,
+        });
+      }
+    }
+
+    if (leads.length > 0) {
+      await this.audit.record({
+        tenantId,
+        action: 'SCHEDULED_LEAD_FOLLOW_UP_SCAN',
+        entityType: 'Lead',
+        summary: `Scheduled scan found ${leads.length} leads needing follow-up`,
+        metadata: { source, count: leads.length },
+      });
+    }
+
+    return { count: leads.length };
+  }
+
   private upsertAction(input: {
     tenantId: string;
     type: ActionType;
@@ -185,15 +261,21 @@ export class OperationsSchedulerService
     customerId?: string | null;
     bookingId?: string | null;
     invoiceId?: string | null;
+    assignedToId?: string | null;
     dueAt: Date;
     metadata: Prisma.InputJsonValue;
   }) {
-    const idempotencyKey = [
+    const leadId = this.metadataLeadId(input.metadata);
+    const idempotencyParts = [
       input.type,
       input.bookingId ?? 'no-booking',
       input.invoiceId ?? 'no-invoice',
       input.customerId ?? 'no-customer',
-    ].join(':');
+    ];
+    if (leadId) {
+      idempotencyParts.push(leadId);
+    }
+    const idempotencyKey = idempotencyParts.join(':');
 
     return this.prisma.operationalAction.upsert({
       where: {
@@ -209,6 +291,7 @@ export class OperationsSchedulerService
         customerId: input.customerId,
         bookingId: input.bookingId,
         invoiceId: input.invoiceId,
+        assignedToId: input.assignedToId,
         dueAt: input.dueAt,
         idempotencyKey,
         source: 'scheduler',
@@ -219,6 +302,7 @@ export class OperationsSchedulerService
         status: ActionStatus.OPEN,
         title: input.title,
         description: input.description,
+        assignedToId: input.assignedToId,
         dueAt: input.dueAt,
         metadata: input.metadata,
       },
@@ -230,5 +314,31 @@ export class OperationsSchedulerService
     if (daysOverdue >= 7 || totalCents >= 100000) return ActionPriority.URGENT;
     if (daysOverdue >= 3 || totalCents >= 50000) return ActionPriority.HIGH;
     return ActionPriority.MEDIUM;
+  }
+
+  private leadPriority(
+    status: LeadStatus,
+    probability: number,
+    estimatedValueCents: number,
+  ) {
+    if (
+      status === LeadStatus.BOOKING_READY ||
+      probability >= 80 ||
+      estimatedValueCents >= 50000
+    ) {
+      return ActionPriority.URGENT;
+    }
+    if (status === LeadStatus.QUALIFIED || probability >= 50) {
+      return ActionPriority.HIGH;
+    }
+    return ActionPriority.MEDIUM;
+  }
+
+  private metadataLeadId(metadata: Prisma.InputJsonValue) {
+    if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+      const value = (metadata as Record<string, unknown>).leadId;
+      return typeof value === 'string' ? value : null;
+    }
+    return null;
   }
 }

@@ -10,6 +10,7 @@ import {
   AutomationTrigger,
   BookingStatus,
   InvoiceStatus,
+  LeadStatus,
   Prisma,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
@@ -342,6 +343,88 @@ export class WorkflowsService {
     };
   }
 
+  async scanLeadFollowUps(user: AuthUser) {
+    assertManager(user);
+    const now = new Date();
+    const staleCutoff = this.addHours(now, -6);
+    const leads = await this.prisma.lead.findMany({
+      where: {
+        tenantId: user.tenantId,
+        status: {
+          in: [
+            LeadStatus.NEW,
+            LeadStatus.CONTACTED,
+            LeadStatus.QUALIFIED,
+            LeadStatus.BOOKING_READY,
+          ],
+        },
+        OR: [
+          { followUpAt: { lte: now } },
+          {
+            followUpAt: null,
+            updatedAt: { lte: staleCutoff },
+          },
+        ],
+      },
+      include: { customer: true, assignedTo: true },
+      orderBy: [{ followUpAt: 'asc' }, { updatedAt: 'asc' }],
+      take: 100,
+    });
+
+    const actions: unknown[] = [];
+    for (const lead of leads) {
+      actions.push(
+        await this.upsertAction({
+          tenantId: user.tenantId,
+          type: ActionType.FOLLOW_UP_STALE_INQUIRY,
+          priority: this.leadPriority(
+            lead.status,
+            lead.conversionProbability,
+            lead.estimatedValueCents ?? 0,
+          ),
+          title: `Follow up lead: ${lead.title}`,
+          description: `${lead.customer?.name ?? 'A lead'} needs follow-up before the opportunity goes cold.`,
+          customerId: lead.customerId,
+          assignedToId: lead.assignedToId ?? user.sub,
+          dueAt: now,
+          metadata: {
+            leadId: lead.id,
+            leadStatus: lead.status,
+            estimatedValueCents: lead.estimatedValueCents,
+            conversionProbability: lead.conversionProbability,
+            followUpAt: lead.followUpAt,
+          },
+        }),
+      );
+
+      if (lead.customerId) {
+        await this.automations.trigger({
+          tenantId: user.tenantId,
+          trigger: AutomationTrigger.LEAD_FOLLOW_UP,
+          customerId: lead.customerId,
+          leadId: lead.id,
+        });
+      }
+    }
+
+    await this.audit.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'LEAD_FOLLOW_UP_SCAN',
+      entityType: 'Lead',
+      summary: `Scanned leads and found ${leads.length} follow-ups due`,
+      metadata: { count: leads.length },
+    });
+
+    return {
+      scannedAt: now,
+      count: leads.length,
+      actionsCreatedOrUpdated: actions.length,
+      items: leads,
+      actions,
+    };
+  }
+
   private async upsertAction(input: {
     tenantId: string;
     type: ActionType;
@@ -394,13 +477,19 @@ export class WorkflowsService {
     bookingId?: string | null;
     invoiceId?: string | null;
     customerId?: string | null;
+    metadata?: Prisma.InputJsonValue;
   }) {
-    return [
+    const leadId = this.metadataLeadId(input.metadata);
+    const parts = [
       input.type,
       input.bookingId ?? 'no-booking',
       input.invoiceId ?? 'no-invoice',
       input.customerId ?? 'no-customer',
-    ].join(':');
+    ];
+    if (leadId) {
+      parts.push(leadId);
+    }
+    return parts.join(':');
   }
 
   private async completeActions(
@@ -444,6 +533,32 @@ export class WorkflowsService {
     if (days >= 7 || totalCents >= 100000) return ActionPriority.URGENT;
     if (days >= 3 || totalCents >= 50000) return ActionPriority.HIGH;
     return ActionPriority.MEDIUM;
+  }
+
+  private leadPriority(
+    status: LeadStatus,
+    probability: number,
+    estimatedValueCents: number,
+  ) {
+    if (
+      status === LeadStatus.BOOKING_READY ||
+      probability >= 80 ||
+      estimatedValueCents >= 50000
+    ) {
+      return ActionPriority.URGENT;
+    }
+    if (status === LeadStatus.QUALIFIED || probability >= 50) {
+      return ActionPriority.HIGH;
+    }
+    return ActionPriority.MEDIUM;
+  }
+
+  private metadataLeadId(metadata?: Prisma.InputJsonValue) {
+    if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+      const value = (metadata as Record<string, unknown>).leadId;
+      return typeof value === 'string' ? value : null;
+    }
+    return null;
   }
 
   private daysBetween(from: Date, to: Date) {

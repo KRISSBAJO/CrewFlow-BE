@@ -18,6 +18,7 @@ type AutomationContext = {
   customerId?: string;
   bookingId?: string;
   invoiceId?: string;
+  leadId?: string;
 };
 
 @Injectable()
@@ -287,11 +288,17 @@ export class AutomationsService {
           include: { customer: true, booking: { include: { service: true } } },
         })
       : null;
+    const lead = context.leadId
+      ? await this.prisma.lead.findFirst({
+          where: { id: context.leadId, tenantId: context.tenantId },
+          include: { customer: true, assignedTo: true },
+        })
+      : null;
     const customer = context.customerId
       ? await this.prisma.customer.findFirst({
           where: { id: context.customerId, tenantId: context.tenantId },
         })
-      : (booking?.customer ?? invoice?.customer ?? null);
+      : (lead?.customer ?? booking?.customer ?? invoice?.customer ?? null);
 
     return {
       tenantId: context.tenantId,
@@ -299,6 +306,14 @@ export class AutomationsService {
       customerId: customer?.id,
       customerName: customer?.name,
       customerPhone: customer?.phone,
+      leadId: lead?.id,
+      leadTitle: lead?.title,
+      leadValue: lead?.estimatedValueCents
+        ? (lead.estimatedValueCents / 100).toFixed(2)
+        : undefined,
+      leadProbability: lead?.conversionProbability,
+      leadFollowUpAt: lead?.followUpAt,
+      leadOwnerName: lead?.assignedTo?.name,
       service: booking?.service.title ?? invoice?.booking?.service.title,
       startTime: booking?.startTime,
       staffName: booking?.assignedStaff?.name,
@@ -313,6 +328,7 @@ export class AutomationsService {
       context.trigger,
       context.bookingId ?? 'no-booking',
       context.invoiceId ?? 'no-invoice',
+      context.leadId ?? 'no-lead',
       context.customerId ?? 'no-customer',
     ].join(':');
   }
