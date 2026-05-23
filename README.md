@@ -1,0 +1,59 @@
+# CrewFlow API
+
+AI-powered operations assistant backend for cleaning and home-service businesses.
+
+This is the money-version foundation: tenants, auth, staff, customers, services,
+bookings, attendance, invoices, message logs, automation templates, dashboard
+summary, and an AI-receptionist-ready inquiry endpoint.
+
+## Setup
+
+```bash
+yarn install
+cp .env.example .env
+docker compose up -d
+yarn prisma:generate
+yarn prisma:migrate
+yarn seed
+yarn start:dev
+```
+
+Default API URL:
+
+```text
+http://localhost:3002/api
+```
+
+Swagger/OpenAPI docs:
+
+```text
+http://localhost:3002/api/docs
+```
+
+Demo login after seeding:
+
+```text
+owner@sparkle.test / Password123!
+```
+
+## Core Endpoints
+
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/dashboard`
+- `GET|POST /api/customers`
+- `GET|POST /api/services`
+- `GET|POST|PATCH /api/bookings`
+- `GET|POST /api/tenant/staff`
+- `POST /api/attendance/check-in`
+- `POST /api/attendance/check-out`
+- `GET|POST /api/invoices`
+- `GET|POST /api/messages`
+- `GET|POST /api/automations`
+- `POST /api/receptionist/inquiry`
+- `GET|PATCH /api/receptionist/config`
+- `GET /api/receptionist/conversations`
+- `GET /api/receptionist/conversations/:id`
+- `POST /api/receptionist/conversations/:id/handoff`
+
+Every protected endpoint is tenant-scoped from the JWT payload.
