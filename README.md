@@ -48,6 +48,12 @@ owner@sparkle.test / Password123!
 - `POST /api/bookings/:id/on-the-way`
 - `POST /api/bookings/:id/no-show`
 - `POST /api/bookings/:id/complete`
+- `GET /api/field/jobs`
+- `GET /api/field/jobs/:bookingId`
+- `POST /api/field/jobs/:bookingId/start`
+- `POST /api/field/jobs/:bookingId/notes`
+- `POST /api/field/jobs/:bookingId/complete`
+- `GET /api/field/jobs/:bookingId/report`
 - `GET|POST /api/tenant/staff`
 - `POST /api/attendance/check-in`
 - `POST /api/attendance/check-out`

@@ -132,6 +132,80 @@ export class InvoicesService {
     });
   }
 
+  async createFromBooking(
+    tenantId: string,
+    bookingId: string,
+    actorId?: string,
+  ) {
+    const booking = await this.prisma.booking.findFirst({
+      where: { id: bookingId, tenantId },
+      include: { service: true, customer: true, invoice: true },
+    });
+
+    if (!booking) {
+      throw new NotFoundException('Booking not found');
+    }
+
+    if (booking.invoice) {
+      return booking.invoice;
+    }
+
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + 7);
+
+    const invoice = await this.prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.update({
+        where: { id: tenantId },
+        data: { invoiceCounter: { increment: 1 } },
+        select: { invoiceCounter: true },
+      });
+
+      return tx.invoice.create({
+        data: {
+          tenantId,
+          customerId: booking.customerId,
+          bookingId: booking.id,
+          invoiceNo: this.formatInvoiceNo(tenant.invoiceCounter),
+          subtotalCents: booking.service.priceCents,
+          taxCents: 0,
+          totalCents: booking.service.priceCents,
+          dueDate,
+          status: InvoiceStatus.SENT,
+          lineItems: {
+            create: {
+              tenantId,
+              description: booking.service.title,
+              quantity: 1,
+              unitCents: booking.service.priceCents,
+              totalCents: booking.service.priceCents,
+            },
+          },
+        },
+        include: this.include(),
+      });
+    });
+
+    await this.audit.record({
+      tenantId,
+      actorId,
+      action: 'INVOICE_AUTO_CREATED',
+      entityType: 'Invoice',
+      entityId: invoice.id,
+      summary: `Auto-created invoice ${invoice.invoiceNo} after job completion`,
+      metadata: { bookingId, totalCents: invoice.totalCents },
+    });
+
+    await this.automations.trigger({
+      tenantId,
+      trigger: 'INVOICE_DUE',
+      customerId: invoice.customerId,
+      invoiceId: invoice.id,
+      bookingId,
+    });
+
+    return invoice;
+  }
+
   async updateStatus(user: AuthUser, id: string, status: InvoiceStatus) {
     assertManager(user);
     const existing = await this.prisma.invoice.findFirst({

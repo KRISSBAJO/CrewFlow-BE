@@ -10,6 +10,7 @@ import { BookingsModule } from './bookings/bookings.module';
 import { RolesGuard } from './common/roles.guard';
 import { CustomersModule } from './customers/customers.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { FieldOpsModule } from './field-ops/field-ops.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { InboxModule } from './inbox/inbox.module';
 import { MessagesModule } from './messages/messages.module';
@@ -31,6 +32,7 @@ import { WorkflowsModule } from './workflows/workflows.module';
     CustomersModule,
     ServicesModule,
     BookingsModule,
+    FieldOpsModule,
     AttendanceModule,
     InvoicesModule,
     InboxModule,

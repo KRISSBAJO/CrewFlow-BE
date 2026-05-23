@@ -133,6 +133,11 @@ enum ActionStatus {
   DISMISSED
 }
 
+enum JobReportStatus {
+  DRAFT
+  COMPLETED
+}
+
 model Tenant {
   id                   String                @id @default(cuid())
   businessName         String
@@ -151,6 +156,7 @@ model Tenant {
   invoiceLineItems     InvoiceLineItem[]
   payments             Payment[]
   operationalActions   OperationalAction[]
+  fieldJobReports      FieldJobReport[]
   messages             MessageLog[]
   automations          AutomationRule[]
   automationRuns       AutomationRun[]
@@ -178,6 +184,7 @@ model User {
   attendance             Attendance[]
   assignedActions        OperationalAction[] @relation("ActionAssignee")
   assignedConversations  Conversation[]      @relation("ConversationAssignee")
+  completedJobReports    FieldJobReport[]    @relation("JobReportCompletedBy")
   auditLogs              AuditLog[]
   handedOffConversations Conversation[]      @relation("ConversationHandoff")
 
@@ -246,6 +253,7 @@ model Booking {
   automationRuns     AutomationRun[]
   bookingIntents     BookingIntent[]
   operationalActions OperationalAction[]
+  fieldJobReport     FieldJobReport?
 
   @@index([tenantId, startTime])
   @@index([tenantId, status])
@@ -352,6 +360,29 @@ model OperationalAction {
   @@unique([tenantId, idempotencyKey])
   @@index([tenantId, status, priority, dueAt])
   @@index([tenantId, type])
+}
+
+model FieldJobReport {
+  id                    String          @id @default(cuid())
+  tenantId              String
+  bookingId             String          @unique
+  status                JobReportStatus @default(DRAFT)
+  checklist             Json?
+  photoUrls             String[]        @default([])
+  staffNotes            String?
+  customerSignatureUrl  String?
+  customerSignatureName String?
+  completedById         String?
+  startedAt             DateTime?
+  completedAt           DateTime?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+  tenant                Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  booking               Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  completedBy           User?           @relation("JobReportCompletedBy", fields: [completedById], references: [id])
+
+  @@index([tenantId, status, completedAt])
+  @@index([tenantId, completedById])
 }
 
 model InvoiceLineItem {
