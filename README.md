@@ -48,6 +48,12 @@ owner@sparkle.test / Password123!
 - `POST /api/attendance/check-in`
 - `POST /api/attendance/check-out`
 - `GET|POST /api/invoices`
+- `POST /api/invoices/:id/payment-link`
+- `GET /api/invoices/:id/html`
+- `GET /api/payments`
+- `POST /api/payments/:id/receipt`
+- `POST /api/payments/mock-checkout/:id/success`
+- `POST /api/webhooks/stripe`
 - `GET|POST /api/messages`
 - `GET|POST /api/automations`
 - `POST /api/receptionist/inquiry`

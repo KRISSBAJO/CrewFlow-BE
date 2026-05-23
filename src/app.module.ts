@@ -12,6 +12,7 @@ import { CustomersModule } from './customers/customers.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { MessagesModule } from './messages/messages.module';
+import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ReceptionistModule } from './receptionist/receptionist.module';
 import { ServicesModule } from './services/services.module';
@@ -30,6 +31,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     BookingsModule,
     AttendanceModule,
     InvoicesModule,
+    PaymentsModule,
     MessagesModule,
     AutomationsModule,
     DashboardModule,

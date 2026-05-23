@@ -60,6 +60,7 @@ enum AutomationRunStatus {
 
 enum WebhookProvider {
   WHATSAPP
+  STRIPE
 }
 
 enum WebhookEventStatus {
@@ -91,48 +92,64 @@ enum BookingIntentStatus {
   CANCELLED
 }
 
+enum PaymentProvider {
+  STRIPE
+  MOCK
+  CASH
+  BANK_TRANSFER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
 model Tenant {
-  id               String            @id @default(cuid())
-  businessName     String
-  slug             String            @unique
-  industry         String
-  subscriptionPlan String            @default("pilot")
-  invoiceCounter   Int               @default(0)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  users            User[]
-  customers        Customer[]
-  services         Service[]
-  bookings         Booking[]
-  attendance       Attendance[]
-  invoices         Invoice[]
-  invoiceLineItems InvoiceLineItem[]
-  messages         MessageLog[]
-  automations      AutomationRule[]
-  automationRuns   AutomationRun[]
-  webhookEvents    WebhookEvent[]
-  receptionistConfig ReceptionistConfig?
-  conversations    Conversation[]
+  id                   String                @id @default(cuid())
+  businessName         String
+  slug                 String                @unique
+  industry             String
+  subscriptionPlan     String                @default("pilot")
+  invoiceCounter       Int                   @default(0)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  users                User[]
+  customers            Customer[]
+  services             Service[]
+  bookings             Booking[]
+  attendance           Attendance[]
+  invoices             Invoice[]
+  invoiceLineItems     InvoiceLineItem[]
+  payments             Payment[]
+  messages             MessageLog[]
+  automations          AutomationRule[]
+  automationRuns       AutomationRun[]
+  webhookEvents        WebhookEvent[]
+  receptionistConfig   ReceptionistConfig?
+  conversations        Conversation[]
   conversationMessages ConversationMessage[]
-  bookingIntents   BookingIntent[]
-  auditLogs        AuditLog[]
+  bookingIntents       BookingIntent[]
+  auditLogs            AuditLog[]
 }
 
 model User {
-  id           String       @id @default(cuid())
-  tenantId     String
-  name         String
-  email        String
-  passwordHash String
-  role         UserRole     @default(STAFF)
-  phone        String?
-  active       Boolean      @default(true)
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  bookings     Booking[]    @relation("AssignedStaff")
-  attendance   Attendance[]
-  auditLogs     AuditLog[]
+  id                     String         @id @default(cuid())
+  tenantId               String
+  name                   String
+  email                  String
+  passwordHash           String
+  role                   UserRole       @default(STAFF)
+  phone                  String?
+  active                 Boolean        @default(true)
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+  tenant                 Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bookings               Booking[]      @relation("AssignedStaff")
+  attendance             Attendance[]
+  auditLogs              AuditLog[]
   handedOffConversations Conversation[] @relation("ConversationHandoff")
 
   @@unique([tenantId, email])
@@ -140,20 +157,20 @@ model User {
 }
 
 model Customer {
-  id        String       @id @default(cuid())
-  tenantId  String
-  name      String
-  phone     String
-  email     String?
-  notes     String?
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
-  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  bookings  Booking[]
-  invoices  Invoice[]
-  messages  MessageLog[]
+  id             String          @id @default(cuid())
+  tenantId       String
+  name           String
+  phone          String
+  email          String?
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bookings       Booking[]
+  invoices       Invoice[]
+  messages       MessageLog[]
   automationRuns AutomationRun[]
-  conversations Conversation[]
+  conversations  Conversation[]
   bookingIntents BookingIntent[]
 
   @@unique([tenantId, phone])
@@ -161,16 +178,16 @@ model Customer {
 }
 
 model Service {
-  id              String    @id @default(cuid())
+  id              String          @id @default(cuid())
   tenantId        String
   title           String
   description     String?
   durationMinutes Int
   priceCents      Int
-  active          Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  active          Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   bookings        Booking[]
   bookingIntents  BookingIntent[]
 
@@ -179,22 +196,22 @@ model Service {
 }
 
 model Booking {
-  id              String        @id @default(cuid())
+  id              String          @id @default(cuid())
   tenantId        String
   customerId      String
   serviceId       String
   assignedStaffId String?
   startTime       DateTime
   endTime         DateTime?
-  status          BookingStatus @default(REQUESTED)
-  source          String        @default("manual")
+  status          BookingStatus   @default(REQUESTED)
+  source          String          @default("manual")
   notes           String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer        Customer      @relation(fields: [customerId], references: [id])
-  service         Service       @relation(fields: [serviceId], references: [id])
-  assignedStaff   User?         @relation("AssignedStaff", fields: [assignedStaffId], references: [id])
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer        Customer        @relation(fields: [customerId], references: [id])
+  service         Service         @relation(fields: [serviceId], references: [id])
+  assignedStaff   User?           @relation("AssignedStaff", fields: [assignedStaffId], references: [id])
   invoice         Invoice?
   automationRuns  AutomationRun[]
   bookingIntents  BookingIntent[]
@@ -205,44 +222,73 @@ model Booking {
 }
 
 model Attendance {
-  id           String    @id @default(cuid())
-  tenantId     String
-  userId       String
-  checkIn      DateTime  @default(now())
-  checkOut     DateTime?
-  latitude     Float?
-  longitude    Float?
-  photoUrl     String?
-  notes        String?
-  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user         User      @relation(fields: [userId], references: [id])
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  checkIn   DateTime  @default(now())
+  checkOut  DateTime?
+  latitude  Float?
+  longitude Float?
+  photoUrl  String?
+  notes     String?
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id])
 
   @@index([tenantId, userId, checkIn])
 }
 
 model Invoice {
-  id            String            @id @default(cuid())
-  tenantId      String
-  customerId    String
-  bookingId     String?           @unique
-  invoiceNo     String
-  subtotalCents Int
-  taxCents      Int               @default(0)
-  totalCents    Int
-  dueDate       DateTime
-  status        InvoiceStatus     @default(DRAFT)
-  paidAt        DateTime?
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
-  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer      Customer          @relation(fields: [customerId], references: [id])
-  booking       Booking?          @relation(fields: [bookingId], references: [id])
-  lineItems     InvoiceLineItem[]
-  automationRuns AutomationRun[]
+  id               String            @id @default(cuid())
+  tenantId         String
+  customerId       String
+  bookingId        String?           @unique
+  invoiceNo        String
+  subtotalCents    Int
+  taxCents         Int               @default(0)
+  totalCents       Int
+  dueDate          DateTime
+  status           InvoiceStatus     @default(DRAFT)
+  paidAt           DateTime?
+  paymentUrl       String?
+  paymentProvider  PaymentProvider?
+  paymentReference String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer         Customer          @relation(fields: [customerId], references: [id])
+  booking          Booking?          @relation(fields: [bookingId], references: [id])
+  lineItems        InvoiceLineItem[]
+  payments         Payment[]
+  automationRuns   AutomationRun[]
 
   @@unique([tenantId, invoiceNo])
   @@index([tenantId, status])
   @@index([tenantId, dueDate])
+}
+
+model Payment {
+  id                String          @id @default(cuid())
+  tenantId          String
+  invoiceId         String
+  provider          PaymentProvider @default(MOCK)
+  status            PaymentStatus   @default(PENDING)
+  amountCents       Int
+  currency          String          @default("usd")
+  checkoutUrl       String?
+  providerPaymentId String?
+  providerSessionId String?
+  receiptUrl        String?
+  paidAt            DateTime?
+  failureReason     String?
+  metadata          Json?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice           Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSessionId])
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, invoiceId])
 }
 
 model InvoiceLineItem {
@@ -261,33 +307,33 @@ model InvoiceLineItem {
 }
 
 model MessageLog {
-  id          String           @id @default(cuid())
-  tenantId    String
-  customerId  String?
-  direction   MessageDirection
-  provider    MessageProvider
-  content     String
-  metadata    Json?
-  createdAt   DateTime         @default(now())
-  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer    Customer?        @relation(fields: [customerId], references: [id])
+  id         String           @id @default(cuid())
+  tenantId   String
+  customerId String?
+  direction  MessageDirection
+  provider   MessageProvider
+  content    String
+  metadata   Json?
+  createdAt  DateTime         @default(now())
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer   Customer?        @relation(fields: [customerId], references: [id])
 
   @@index([tenantId, createdAt])
   @@index([tenantId, customerId])
 }
 
 model AutomationRule {
-  id             String            @id @default(cuid())
-  tenantId       String
-  trigger        AutomationTrigger
-  provider       MessageProvider   @default(WHATSAPP)
-  template       String
-  active         Boolean           @default(true)
-  delayMinutes   Int               @default(0)
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
-  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  runs           AutomationRun[]
+  id           String            @id @default(cuid())
+  tenantId     String
+  trigger      AutomationTrigger
+  provider     MessageProvider   @default(WHATSAPP)
+  template     String
+  active       Boolean           @default(true)
+  delayMinutes Int               @default(0)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runs         AutomationRun[]
 
   @@unique([tenantId, trigger])
   @@index([tenantId, active])
@@ -359,22 +405,22 @@ model ReceptionistConfig {
 }
 
 model Conversation {
-  id              String                @id @default(cuid())
-  tenantId        String
-  customerId      String?
-  channel         MessageProvider       @default(WEB_CHAT)
-  status          ConversationStatus    @default(OPEN)
-  lastMessageAt   DateTime              @default(now())
-  handedOffAt     DateTime?
-  handedOffToId   String?
-  handoffReason   String?
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
-  tenant          Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer        Customer?             @relation(fields: [customerId], references: [id])
-  handedOffTo     User?                 @relation("ConversationHandoff", fields: [handedOffToId], references: [id])
-  messages        ConversationMessage[]
-  bookingIntents  BookingIntent[]
+  id             String                @id @default(cuid())
+  tenantId       String
+  customerId     String?
+  channel        MessageProvider       @default(WEB_CHAT)
+  status         ConversationStatus    @default(OPEN)
+  lastMessageAt  DateTime              @default(now())
+  handedOffAt    DateTime?
+  handedOffToId  String?
+  handoffReason  String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  tenant         Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer       Customer?             @relation(fields: [customerId], references: [id])
+  handedOffTo    User?                 @relation("ConversationHandoff", fields: [handedOffToId], references: [id])
+  messages       ConversationMessage[]
+  bookingIntents BookingIntent[]
 
   @@index([tenantId, status, lastMessageAt])
   @@index([tenantId, customerId])
