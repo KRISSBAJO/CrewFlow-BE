@@ -18,6 +18,7 @@ import { ReceptionistModule } from './receptionist/receptionist.module';
 import { ServicesModule } from './services/services.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { WorkflowsModule } from './workflows/workflows.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     DashboardModule,
     ReceptionistModule,
     WebhooksModule,
+    WorkflowsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

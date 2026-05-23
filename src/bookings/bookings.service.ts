@@ -11,6 +11,7 @@ import { addMinutes } from '../common/domain';
 import { AuthUser } from '../common/current-user.decorator';
 import { assertManager, isManager } from '../common/permissions';
 import { PrismaService } from '../prisma/prisma.service';
+import { WorkflowsService } from '../workflows/workflows.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
 
@@ -46,6 +47,7 @@ export class BookingsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly automations: AutomationsService,
+    private readonly workflows: WorkflowsService,
   ) {}
 
   async create(user: AuthUser, dto: CreateBookingDto) {
@@ -222,6 +224,19 @@ export class BookingsService {
     return booking;
   }
 
+  markOnTheWay(user: AuthUser, id: string) {
+    return this.update(user, id, { status: BookingStatus.IN_PROGRESS });
+  }
+
+  markNoShow(user: AuthUser, id: string) {
+    assertManager(user);
+    return this.update(user, id, { status: BookingStatus.NO_SHOW });
+  }
+
+  complete(user: AuthUser, id: string) {
+    return this.update(user, id, { status: BookingStatus.COMPLETED });
+  }
+
   private async triggerBookingAutomation(booking: {
     id: string;
     tenantId: string;
@@ -252,6 +267,8 @@ export class BookingsService {
         bookingId: booking.id,
       });
     }
+
+    await this.workflows.handleBookingStatusChanged(booking);
   }
 
   private async assertCustomer(tenantId: string, customerId: string) {

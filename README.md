@@ -44,6 +44,9 @@ owner@sparkle.test / Password123!
 - `GET|POST /api/customers`
 - `GET|POST /api/services`
 - `GET|POST|PATCH /api/bookings`
+- `POST /api/bookings/:id/on-the-way`
+- `POST /api/bookings/:id/no-show`
+- `POST /api/bookings/:id/complete`
 - `GET|POST /api/tenant/staff`
 - `POST /api/attendance/check-in`
 - `POST /api/attendance/check-out`
@@ -54,6 +57,9 @@ owner@sparkle.test / Password123!
 - `POST /api/payments/:id/receipt`
 - `POST /api/payments/mock-checkout/:id/success`
 - `POST /api/webhooks/stripe`
+- `GET|PATCH /api/actions`
+- `POST /api/workflows/scan-overdue-invoices`
+- `POST /api/workflows/scan-lost-revenue`
 - `GET|POST /api/messages`
 - `GET|POST /api/automations`
 - `POST /api/receptionist/inquiry`

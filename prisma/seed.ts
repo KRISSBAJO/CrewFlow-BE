@@ -192,6 +192,11 @@ async function main() {
         '{{staffName}} from {{businessName}} is on the way. Reply here if anything changed.',
     },
     {
+      trigger: AutomationTrigger.MISSED_APPOINTMENT,
+      template:
+        'Hi {{customerName}}, we missed you for your {{service}} appointment. Reply here and we can help reschedule.',
+    },
+    {
       trigger: AutomationTrigger.INVOICE_DUE,
       template:
         'Friendly reminder from {{businessName}}: invoice {{invoiceNo}} for ${{total}} is due on {{dueDate}}.',

@@ -59,4 +59,19 @@ export class BookingsController {
   ) {
     return this.bookings.update(user, id, dto);
   }
+
+  @Post(':id/on-the-way')
+  markOnTheWay(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.bookings.markOnTheWay(user, id);
+  }
+
+  @Post(':id/no-show')
+  markNoShow(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.bookings.markNoShow(user, id);
+  }
+
+  @Post(':id/complete')
+  complete(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.bookings.complete(user, id);
+  }
 }

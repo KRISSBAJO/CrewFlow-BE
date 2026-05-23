@@ -107,6 +107,30 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum ActionType {
+  CONFIRM_BOOKING
+  DISPATCH_STAFF
+  FOLLOW_UP_NO_SHOW
+  COLLECT_PAYMENT
+  REQUEST_REVIEW
+  RESOLVE_STAFF_CONFLICT
+  FOLLOW_UP_STALE_INQUIRY
+}
+
+enum ActionPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ActionStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  DISMISSED
+}
+
 model Tenant {
   id                   String                @id @default(cuid())
   businessName         String
@@ -124,6 +148,7 @@ model Tenant {
   invoices             Invoice[]
   invoiceLineItems     InvoiceLineItem[]
   payments             Payment[]
+  operationalActions   OperationalAction[]
   messages             MessageLog[]
   automations          AutomationRule[]
   automationRuns       AutomationRun[]
@@ -136,42 +161,44 @@ model Tenant {
 }
 
 model User {
-  id                     String         @id @default(cuid())
+  id                     String              @id @default(cuid())
   tenantId               String
   name                   String
   email                  String
   passwordHash           String
-  role                   UserRole       @default(STAFF)
+  role                   UserRole            @default(STAFF)
   phone                  String?
-  active                 Boolean        @default(true)
-  createdAt              DateTime       @default(now())
-  updatedAt              DateTime       @updatedAt
-  tenant                 Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  bookings               Booking[]      @relation("AssignedStaff")
+  active                 Boolean             @default(true)
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  tenant                 Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bookings               Booking[]           @relation("AssignedStaff")
   attendance             Attendance[]
+  assignedActions        OperationalAction[] @relation("ActionAssignee")
   auditLogs              AuditLog[]
-  handedOffConversations Conversation[] @relation("ConversationHandoff")
+  handedOffConversations Conversation[]      @relation("ConversationHandoff")
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
 }
 
 model Customer {
-  id             String          @id @default(cuid())
-  tenantId       String
-  name           String
-  phone          String
-  email          String?
-  notes          String?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  bookings       Booking[]
-  invoices       Invoice[]
-  messages       MessageLog[]
-  automationRuns AutomationRun[]
-  conversations  Conversation[]
-  bookingIntents BookingIntent[]
+  id                 String              @id @default(cuid())
+  tenantId           String
+  name               String
+  phone              String
+  email              String?
+  notes              String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  bookings           Booking[]
+  invoices           Invoice[]
+  messages           MessageLog[]
+  automationRuns     AutomationRun[]
+  conversations      Conversation[]
+  bookingIntents     BookingIntent[]
+  operationalActions OperationalAction[]
 
   @@unique([tenantId, phone])
   @@index([tenantId, name])
@@ -196,25 +223,26 @@ model Service {
 }
 
 model Booking {
-  id              String          @id @default(cuid())
-  tenantId        String
-  customerId      String
-  serviceId       String
-  assignedStaffId String?
-  startTime       DateTime
-  endTime         DateTime?
-  status          BookingStatus   @default(REQUESTED)
-  source          String          @default("manual")
-  notes           String?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer        Customer        @relation(fields: [customerId], references: [id])
-  service         Service         @relation(fields: [serviceId], references: [id])
-  assignedStaff   User?           @relation("AssignedStaff", fields: [assignedStaffId], references: [id])
-  invoice         Invoice?
-  automationRuns  AutomationRun[]
-  bookingIntents  BookingIntent[]
+  id                 String              @id @default(cuid())
+  tenantId           String
+  customerId         String
+  serviceId          String
+  assignedStaffId    String?
+  startTime          DateTime
+  endTime            DateTime?
+  status             BookingStatus       @default(REQUESTED)
+  source             String              @default("manual")
+  notes              String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer           Customer            @relation(fields: [customerId], references: [id])
+  service            Service             @relation(fields: [serviceId], references: [id])
+  assignedStaff      User?               @relation("AssignedStaff", fields: [assignedStaffId], references: [id])
+  invoice            Invoice?
+  automationRuns     AutomationRun[]
+  bookingIntents     BookingIntent[]
+  operationalActions OperationalAction[]
 
   @@index([tenantId, startTime])
   @@index([tenantId, status])
@@ -238,28 +266,29 @@ model Attendance {
 }
 
 model Invoice {
-  id               String            @id @default(cuid())
-  tenantId         String
-  customerId       String
-  bookingId        String?           @unique
-  invoiceNo        String
-  subtotalCents    Int
-  taxCents         Int               @default(0)
-  totalCents       Int
-  dueDate          DateTime
-  status           InvoiceStatus     @default(DRAFT)
-  paidAt           DateTime?
-  paymentUrl       String?
-  paymentProvider  PaymentProvider?
-  paymentReference String?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customer         Customer          @relation(fields: [customerId], references: [id])
-  booking          Booking?          @relation(fields: [bookingId], references: [id])
-  lineItems        InvoiceLineItem[]
-  payments         Payment[]
-  automationRuns   AutomationRun[]
+  id                 String              @id @default(cuid())
+  tenantId           String
+  customerId         String
+  bookingId          String?             @unique
+  invoiceNo          String
+  subtotalCents      Int
+  taxCents           Int                 @default(0)
+  totalCents         Int
+  dueDate            DateTime
+  status             InvoiceStatus       @default(DRAFT)
+  paidAt             DateTime?
+  paymentUrl         String?
+  paymentProvider    PaymentProvider?
+  paymentReference   String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer           Customer            @relation(fields: [customerId], references: [id])
+  booking            Booking?            @relation(fields: [bookingId], references: [id])
+  lineItems          InvoiceLineItem[]
+  payments           Payment[]
+  automationRuns     AutomationRun[]
+  operationalActions OperationalAction[]
 
   @@unique([tenantId, invoiceNo])
   @@index([tenantId, status])
@@ -289,6 +318,37 @@ model Payment {
   @@unique([provider, providerSessionId])
   @@index([tenantId, status, createdAt])
   @@index([tenantId, invoiceId])
+}
+
+model OperationalAction {
+  id             String         @id @default(cuid())
+  tenantId       String
+  type           ActionType
+  priority       ActionPriority @default(MEDIUM)
+  status         ActionStatus   @default(OPEN)
+  title          String
+  description    String?
+  customerId     String?
+  bookingId      String?
+  invoiceId      String?
+  assignedToId   String?
+  dueAt          DateTime?
+  completedAt    DateTime?
+  dismissedAt    DateTime?
+  source         String         @default("workflow")
+  idempotencyKey String
+  metadata       Json?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer       Customer?      @relation(fields: [customerId], references: [id])
+  booking        Booking?       @relation(fields: [bookingId], references: [id])
+  invoice        Invoice?       @relation(fields: [invoiceId], references: [id])
+  assignedTo     User?          @relation("ActionAssignee", fields: [assignedToId], references: [id])
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, status, priority, dueAt])
+  @@index([tenantId, type])
 }
 
 model InvoiceLineItem {
