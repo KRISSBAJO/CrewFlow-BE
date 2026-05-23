@@ -68,6 +68,10 @@ Required:
 - `JWT_EXPIRES_IN`
 - `PORT`
 
+Security/deploy:
+
+- `CORS_ORIGIN` comma-separated allowed frontend origins. Leave unset only for local development.
+
 AI receptionist:
 
 - `OPENAI_API_KEY`
@@ -156,8 +160,13 @@ The smoke test checks health, login, dashboard, booking creation, receptionist i
 - `GET /api/payments`
 - `GET /api/actions`
 - `GET /api/inbox`
+- `GET /api/leads`
+- `GET /api/leads/analytics`
+- `GET /api/retention`
 - `POST /api/inbox/:id/booking-intents/:intentId/book`
 - `POST /api/receptionist/inquiry`
+- `POST /api/workflows/scan-lead-follow-ups`
+- `POST /api/retention/scan`
 - `GET /api/webhooks/whatsapp/status`
 - `GET /api/webhooks/whatsapp/events`
 - `GET /api/automations/runs`
@@ -173,6 +182,7 @@ Important:
 
 - Do not run demo seed against production customer data.
 - Use a long random `JWT_SECRET`.
+- Set `CORS_ORIGIN` to your deployed frontend origin.
 - Set `WHATSAPP_APP_SECRET` so WhatsApp webhook signatures are enforced.
 - Set `STRIPE_WEBHOOK_SECRET` so Stripe webhook signatures are enforced.
 - Turn on the scheduler only when you want automated operational scans.

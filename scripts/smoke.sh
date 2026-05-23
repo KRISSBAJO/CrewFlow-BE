@@ -55,4 +55,22 @@ whatsapp="$(
 )"
 echo "whatsapp: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.provider.mode} ready=${j.provider.ready}`)' "$whatsapp")"
 
+leads="$(
+  curl -fsS "$API_URL/leads/analytics" \
+    -H "Authorization: Bearer $token"
+)"
+echo "leads: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.total} total, ${j.followUpsDue} follow-ups due`)' "$leads")"
+
+retention="$(
+  curl -fsS "$API_URL/retention" \
+    -H "Authorization: Bearer $token"
+)"
+echo "retention: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.repeatCandidates.length} repeat, ${j.winBackCandidates.length} win-back`)' "$retention")"
+
+actions="$(
+  curl -fsS "$API_URL/actions" \
+    -H "Authorization: Bearer $token"
+)"
+echo "actions: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.length} open actions`)' "$actions")"
+
 echo "smoke: passed"

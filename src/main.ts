@@ -3,12 +3,14 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { corsOrigins, validateEnv } from './config/env';
 
 async function bootstrap() {
+  validateEnv();
   const app = await NestFactory.create(AppModule, { rawBody: true });
   app.use(helmet());
   app.enableCors({
-    origin: true,
+    origin: corsOrigins(),
     credentials: true,
   });
   app.setGlobalPrefix('api');

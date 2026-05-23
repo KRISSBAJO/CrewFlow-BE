@@ -19,6 +19,7 @@ Required:
 - [ ] `JWT_SECRET`
 - [ ] `JWT_EXPIRES_IN`
 - [ ] `PORT`
+- [ ] `CORS_ORIGIN`
 
 Recommended:
 
@@ -53,8 +54,10 @@ Payments:
 ## Deployment Notes
 
 - Run migrations before serving traffic: `yarn prisma:migrate` or your platform migration command.
+- Serve the compiled backend with `yarn start:prod`.
 - Do not run demo seed against a production customer database.
 - Use a long random `JWT_SECRET`.
+- Set `CORS_ORIGIN` to the deployed frontend URL.
 - Keep `WHATSAPP_APP_SECRET` set in production so webhook signatures are enforced.
 - Keep `STRIPE_WEBHOOK_SECRET` set in production so Stripe signatures are enforced.
 - Use the Settings WhatsApp panel after deployment to confirm credentials and webhook events.
@@ -70,6 +73,8 @@ Then verify:
 - [ ] Login works
 - [ ] Dashboard loads
 - [ ] Receptionist simulator creates an intake
+- [ ] Lead pipeline loads and lead analytics return
+- [ ] Retention page loads repeat and win-back candidates
 - [ ] Booking can be created
 - [ ] Field completion creates invoice
 - [ ] Payment link can be created
