@@ -77,6 +77,121 @@ export class TenantsService {
     });
   }
 
+  async activation(user: AuthUser) {
+    const tenantId = user.tenantId;
+    const [
+      tenant,
+      onboarding,
+      services,
+      staff,
+      customers,
+      bookings,
+      automationRules,
+      billingEvents,
+    ] = await Promise.all([
+      this.prisma.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: {
+          businessName: true,
+          industry: true,
+          subscriptionStatus: true,
+          billingEmail: true,
+          monthlyPriceCents: true,
+          setupFeeCents: true,
+          currentPeriodEnd: true,
+          nextBillingAt: true,
+        },
+      }),
+      this.prisma.onboardingProfile.findUnique({ where: { tenantId } }),
+      this.prisma.service.count({ where: { tenantId, active: true } }),
+      this.prisma.user.count({ where: { tenantId, active: true } }),
+      this.prisma.customer.count({ where: { tenantId } }),
+      this.prisma.booking.count({ where: { tenantId } }),
+      this.prisma.automationRule.count({ where: { tenantId, active: true } }),
+      this.prisma.platformBillingEvent.count({ where: { tenantId } }),
+    ]);
+
+    const steps = [
+      {
+        id: 'business_profile',
+        label: 'Business profile',
+        detail: `${tenant.businessName} · ${tenant.industry}`,
+        done: Boolean(tenant.businessName && tenant.industry),
+        target: 'settings',
+      },
+      {
+        id: 'service_catalog',
+        label: 'Service catalog',
+        detail: services ? `${services} services active` : 'Add at least one service',
+        done: services > 0,
+        target: 'settings',
+      },
+      {
+        id: 'staff_ready',
+        label: 'Staff ready',
+        detail: staff ? `${staff} users active` : 'Invite owner, managers, or staff',
+        done: staff > 0,
+        target: 'settings',
+      },
+      {
+        id: 'customer_base',
+        label: 'Customer base',
+        detail: customers ? `${customers} customers loaded` : 'Add or import customers',
+        done: customers > 0,
+        target: 'customers',
+      },
+      {
+        id: 'first_booking',
+        label: 'First booking',
+        detail: bookings ? `${bookings} bookings created` : 'Create a test or real booking',
+        done: bookings > 0,
+        target: 'bookings',
+      },
+      {
+        id: 'automation_ready',
+        label: 'Automation ready',
+        detail: automationRules
+          ? `${automationRules} automation rules enabled`
+          : 'Enable reminders and follow-up automation',
+        done: automationRules > 0,
+        target: 'settings',
+      },
+      {
+        id: 'billing_active',
+        label: 'Billing active',
+        detail:
+          tenant.subscriptionStatus === SubscriptionStatus.ACTIVE
+            ? `${this.money(tenant.monthlyPriceCents ?? 0)} monthly plan active`
+            : 'Activate billing before launch',
+        done: tenant.subscriptionStatus === SubscriptionStatus.ACTIVE,
+        target: 'settings',
+      },
+    ];
+    const completed = steps.filter((step) => step.done).length;
+    const score = Math.round((completed / steps.length) * 100);
+    const nextStep = steps.find((step) => !step.done) ?? null;
+    const setupStatus = score === 100 ? 'LAUNCH_READY' : 'IN_PROGRESS';
+
+    if (onboarding && onboarding.setupStatus !== setupStatus) {
+      await this.prisma.onboardingProfile.update({
+        where: { tenantId },
+        data: { setupStatus },
+      });
+    }
+
+    return {
+      score,
+      completed,
+      total: steps.length,
+      setupStatus,
+      launchReady: score === 100,
+      nextStep,
+      steps,
+      counts: { services, staff, customers, bookings, automationRules, billingEvents },
+      biggestProblem: onboarding?.biggestProblem,
+    };
+  }
+
   async updateSettings(tenantId: string, dto: UpdateTenantSettingsDto) {
     const completedSteps = this.normalizeCompletedSteps(dto);
     const setupStatus = completedSteps.length >= 5 ? 'READY' : 'IN_PROGRESS';
@@ -391,6 +506,14 @@ export class TenantsService {
       sessionId: `mock_tenant_${tenantId}_${Date.now()}`,
       url: `${apiBase}/platform/mock-billing/${tenantId}/success`,
     };
+  }
+
+  private money(cents: number) {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0,
+    }).format(cents / 100);
   }
 
   async updateStaff(tenantId: string, id: string, dto: UpdateStaffDto) {

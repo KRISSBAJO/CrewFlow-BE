@@ -63,6 +63,12 @@ tenant_billing="$(
 )"
 echo "tenant billing: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.subscriptionStatus} plan=${j.subscriptionPlan} staff=${j.usage.staff}/${j.limits.staff ?? "∞"}`)' "$tenant_billing")"
 
+activation="$(
+  curl -fsS "$API_URL/tenant/activation" \
+    -H "Authorization: Bearer $token"
+)"
+echo "activation: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.score}% ${j.completed}/${j.total} ${j.setupStatus}`)' "$activation")"
+
 leads="$(
   curl -fsS "$API_URL/leads/analytics" \
     -H "Authorization: Bearer $token"

@@ -31,6 +31,11 @@ export class TenantsController {
     return this.tenants.getOnboarding(user.tenantId);
   }
 
+  @Get('activation')
+  activation(@CurrentUser() user: AuthUser) {
+    return this.tenants.activation(user);
+  }
+
   @Get('billing')
   billing(@CurrentUser() user: AuthUser) {
     return this.tenants.billing(user);
