@@ -166,6 +166,24 @@ model Tenant {
   conversationMessages ConversationMessage[]
   bookingIntents       BookingIntent[]
   auditLogs            AuditLog[]
+  onboardingProfile    OnboardingProfile?
+}
+
+model OnboardingProfile {
+  id             String   @id @default(cuid())
+  tenantId       String   @unique
+  ownerName      String
+  ownerEmail     String
+  ownerPhone     String?
+  staffCount     String?
+  whatsappNumber String?
+  services       String[] @default([])
+  biggestProblem String?
+  setupStatus    String   @default("INTAKE_COMPLETE")
+  source         String   @default("landing")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model User {
