@@ -1,6 +1,12 @@
 import {
+  ActionPriority,
+  ActionStatus,
+  ActionType,
   AutomationTrigger,
+  BookingIntentStatus,
   BookingStatus,
+  ConversationMessageRole,
+  ConversationStatus,
   InvoiceStatus,
   MessageDirection,
   MessageProvider,
@@ -51,6 +57,19 @@ async function main() {
     },
   });
 
+  const manager = await prisma.user.upsert({
+    where: { tenantId_email: { tenantId: tenant.id, email: 'manager@sparkle.test' } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      name: 'Priya Shah',
+      email: 'manager@sparkle.test',
+      passwordHash,
+      role: UserRole.MANAGER,
+      phone: '+15550101012',
+    },
+  });
+
   const deepClean = await prisma.service.upsert({
     where: { tenantId_title: { tenantId: tenant.id, title: 'Deep Home Cleaning' } },
     update: {},
@@ -87,6 +106,30 @@ async function main() {
     },
   });
 
+  const leadCustomer = await prisma.customer.upsert({
+    where: { tenantId_phone: { tenantId: tenant.id, phone: '+15550103030' } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      name: 'Jordan Ellis',
+      phone: '+15550103030',
+      email: 'jordan@example.com',
+      notes: 'Asked for a move-out clean and wants text reminders.',
+    },
+  });
+
+  const overdueCustomer = await prisma.customer.upsert({
+    where: { tenantId_phone: { tenantId: tenant.id, phone: '+15550104040' } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      name: 'Maya Robinson',
+      phone: '+15550104040',
+      email: 'maya@example.com',
+      notes: 'Repeat monthly customer. Usually pays by card link.',
+    },
+  });
+
   await prisma.receptionistConfig.upsert({
     where: { tenantId: tenant.id },
     create: {
@@ -109,6 +152,15 @@ async function main() {
 
   await prisma.invoice.deleteMany({
     where: { tenantId: tenant.id, booking: { source: 'seed' } },
+  });
+  await prisma.operationalAction.deleteMany({
+    where: { tenantId: tenant.id, source: 'seed' },
+  });
+  await prisma.bookingIntent.deleteMany({
+    where: { tenantId: tenant.id, conversation: { channel: MessageProvider.WEB_CHAT } },
+  });
+  await prisma.conversation.deleteMany({
+    where: { tenantId: tenant.id, channel: MessageProvider.WEB_CHAT },
   });
 
   await prisma.booking.deleteMany({
@@ -152,9 +204,67 @@ async function main() {
     },
   });
 
+  const completedAt = new Date(today);
+  completedAt.setDate(completedAt.getDate() - 2);
+  completedAt.setHours(14, 0, 0, 0);
+  const completedBooking = await prisma.booking.create({
+    data: {
+      tenantId: tenant.id,
+      customerId: overdueCustomer.id,
+      serviceId: standardClean.id,
+      assignedStaffId: staff.id,
+      startTime: completedAt,
+      endTime: new Date(completedAt.getTime() + standardClean.durationMinutes * 60_000),
+      status: BookingStatus.COMPLETED,
+      source: 'seed',
+      notes: 'Demo completed job with an overdue invoice.',
+    },
+  });
+
+  const overdueDueDate = new Date(today);
+  overdueDueDate.setDate(overdueDueDate.getDate() - 1);
+  const overdueInvoice = await prisma.invoice.create({
+    data: {
+      tenantId: tenant.id,
+      customerId: overdueCustomer.id,
+      bookingId: completedBooking.id,
+      invoiceNo: 'INV-DEMO-002',
+      subtotalCents: standardClean.priceCents,
+      taxCents: 0,
+      totalCents: standardClean.priceCents,
+      dueDate: overdueDueDate,
+      status: InvoiceStatus.OVERDUE,
+      lineItems: {
+        create: {
+          tenantId: tenant.id,
+          description: standardClean.title,
+          quantity: 1,
+          unitCents: standardClean.priceCents,
+          totalCents: standardClean.priceCents,
+        },
+      },
+    },
+  });
+
+  const requestedTime = new Date(today);
+  requestedTime.setDate(requestedTime.getDate() + 1);
+  requestedTime.setHours(15, 0, 0, 0);
+  await prisma.booking.create({
+    data: {
+      tenantId: tenant.id,
+      customerId: leadCustomer.id,
+      serviceId: deepClean.id,
+      startTime: requestedTime,
+      endTime: new Date(requestedTime.getTime() + deepClean.durationMinutes * 60_000),
+      status: BookingStatus.REQUESTED,
+      source: 'seed',
+      notes: 'Booking request waiting for manager confirmation.',
+    },
+  });
+
   await prisma.tenant.update({
     where: { id: tenant.id },
-    data: { invoiceCounter: 1 },
+    data: { invoiceCounter: 2 },
   });
 
   await prisma.messageLog.deleteMany({
@@ -178,6 +288,83 @@ async function main() {
         content: 'Yes. Deep Home Cleaning starts at $249. We have today at 10 AM or Friday at 2 PM.',
       },
     ],
+  });
+
+  const conversation = await prisma.conversation.create({
+    data: {
+      tenantId: tenant.id,
+      customerId: leadCustomer.id,
+      channel: MessageProvider.WEB_CHAT,
+      status: ConversationStatus.BOOKING_READY,
+      assignedToId: manager.id,
+      lastMessageAt: new Date(),
+      messages: {
+        create: [
+          {
+            tenantId: tenant.id,
+            role: ConversationMessageRole.CUSTOMER,
+            content: 'Can I get a move-out deep clean Friday afternoon at 411 Lake St?',
+          },
+          {
+            tenantId: tenant.id,
+            role: ConversationMessageRole.ASSISTANT,
+            content:
+              'Absolutely. Deep Home Cleaning starts at $249. I can hold Friday afternoon and have the team confirm.',
+          },
+        ],
+      },
+    },
+  });
+
+  await prisma.bookingIntent.create({
+    data: {
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      customerId: leadCustomer.id,
+      serviceId: deepClean.id,
+      status: BookingIntentStatus.READY,
+      preferredWindow: 'Friday afternoon',
+      address: '411 Lake St, Chicago, IL',
+      notes: 'Move-out cleaning request from web chat.',
+      quotedPriceCents: deepClean.priceCents,
+      missingFields: [],
+    },
+  });
+
+  await prisma.operationalAction.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        type: ActionType.COLLECT_PAYMENT,
+        priority: ActionPriority.URGENT,
+        status: ActionStatus.OPEN,
+        title: `Collect overdue invoice ${overdueInvoice.invoiceNo}`,
+        description: `${overdueCustomer.name} has an overdue ${standardClean.title} invoice.`,
+        customerId: overdueCustomer.id,
+        bookingId: completedBooking.id,
+        invoiceId: overdueInvoice.id,
+        assignedToId: manager.id,
+        dueAt: new Date(),
+        source: 'seed',
+        idempotencyKey: 'seed:collect-overdue-invoice',
+        metadata: { totalCents: overdueInvoice.totalCents },
+      },
+      {
+        tenantId: tenant.id,
+        type: ActionType.CONFIRM_BOOKING,
+        priority: ActionPriority.HIGH,
+        status: ActionStatus.OPEN,
+        title: 'Book hot receptionist lead',
+        description: `${leadCustomer.name} is ready to book a deep clean.`,
+        customerId: leadCustomer.id,
+        assignedToId: manager.id,
+        dueAt: new Date(),
+        source: 'seed',
+        idempotencyKey: 'seed:book-hot-lead',
+        metadata: { conversationId: conversation.id },
+      },
+    ],
+    skipDuplicates: true,
   });
 
   const automationRules = [
@@ -243,6 +430,7 @@ async function main() {
   console.log('Login: owner@sparkle.test / Password123!');
   console.log(`Tenant: ${tenant.businessName} (${tenant.id})`);
   console.log(`Owner: ${owner.name}`);
+  console.log(`Manager: ${manager.email}`);
   console.log(`Service: ${standardClean.title}`);
 }
 

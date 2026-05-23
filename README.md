@@ -1,12 +1,21 @@
-# CrewFlow API
+# CrewFlow Backend
 
-AI-powered operations assistant backend for cleaning and home-service businesses.
+AI-powered operations backend for cleaning and home-service businesses.
 
-This is the money-version foundation: tenants, auth, staff, customers, services,
-bookings, attendance, invoices, message logs, automation templates, dashboard
-summary, and an AI-receptionist-ready inquiry endpoint.
+CrewFlow is built around operational pain: missed inquiries, booking chaos, staff dispatch, field completion, unpaid invoices, WhatsApp follow-up, and revenue-risk visibility.
 
-## Setup
+## Stack
+
+- NestJS
+- Prisma
+- PostgreSQL
+- JWT auth
+- Swagger/OpenAPI
+- Meta WhatsApp Cloud API integration
+- Stripe/mock payment links
+- OpenAI-ready receptionist layer
+
+## Local Setup
 
 ```bash
 yarn install
@@ -18,77 +27,153 @@ yarn seed
 yarn start:dev
 ```
 
-Default API URL:
+Default URLs:
 
 ```text
-http://localhost:3002/api
+API:     http://localhost:3002/api
+Swagger: http://localhost:3002/api/docs
+Health:  http://localhost:3002/api/health
 ```
 
-Swagger/OpenAPI docs:
-
-```text
-http://localhost:3002/api/docs
-```
-
-Demo login after seeding:
+Demo login:
 
 ```text
 owner@sparkle.test / Password123!
+manager@sparkle.test / Password123!
+crew@sparkle.test / Password123!
 ```
 
-## Core Endpoints
+## Local Without Docker Desktop
 
-- `POST /api/auth/register`
+Docker Desktop is convenient, but not required. You can run Postgres with Homebrew or another local Postgres install, then set:
+
+```env
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/crewflow?schema=public"
+```
+
+Then run:
+
+```bash
+yarn prisma:migrate
+yarn seed
+yarn start:dev
+```
+
+## Environment Variables
+
+Required:
+
+- `DATABASE_URL`
+- `JWT_SECRET`
+- `JWT_EXPIRES_IN`
+- `PORT`
+
+AI receptionist:
+
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL`
+
+WhatsApp:
+
+- `WHATSAPP_VERIFY_TOKEN`
+- `WHATSAPP_ACCESS_TOKEN`
+- `WHATSAPP_PHONE_NUMBER_ID`
+- `WHATSAPP_APP_SECRET`
+
+Payments:
+
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `PAYMENT_SUCCESS_URL`
+- `PAYMENT_CANCEL_URL`
+
+Operations:
+
+- `RATE_LIMIT_ENABLED`
+- `RATE_LIMIT_WINDOW_MS`
+- `RATE_LIMIT_MAX`
+- `ENABLE_SCHEDULER`
+- `SCHEDULER_INTERVAL_MS`
+
+## Smoke Test
+
+After the backend is running and seeded:
+
+```bash
+./scripts/smoke.sh
+```
+
+Against a remote API:
+
+```bash
+API_URL=https://your-api.example.com/api ./scripts/smoke.sh
+```
+
+The smoke test checks health, login, dashboard, booking creation, receptionist intake, and WhatsApp readiness.
+
+## Demo Data
+
+`yarn seed` creates:
+
+- Sparkle Home Services tenant
+- owner, manager, and staff users
+- cleaning services
+- customers
+- confirmed booking
+- requested booking
+- completed job with overdue invoice
+- booking-ready receptionist conversation
+- automation templates
+- active staff attendance
+- manager actions for hot lead and overdue invoice
+
+## Core Product Areas
+
+- Auth and tenant isolation
+- Tenant settings and onboarding
+- Customers and customer timeline
+- Services and staff management
+- Booking creation, recurrence, inline customers, conflict checks
+- Field job completion and invoice generation
+- Invoice/payment link flow
+- WhatsApp automation and delivery monitor
+- Receptionist intake and booking intent conversion
+- Manager action queue and revenue-risk dashboard
+
+## Useful Endpoints
+
 - `POST /api/auth/login`
 - `GET /api/health`
 - `GET /api/dashboard`
-- `GET|POST /api/customers`
+- `GET /api/customers`
 - `GET /api/customers/:id/timeline`
-- `GET|POST /api/services`
-- `GET|POST|PATCH /api/bookings`
-- `POST /api/bookings/:id/on-the-way`
-- `POST /api/bookings/:id/no-show`
-- `POST /api/bookings/:id/complete`
+- `GET|POST /api/bookings`
+- `PATCH /api/bookings/:id`
 - `GET /api/field/jobs`
-- `GET /api/field/jobs/:bookingId`
-- `POST /api/field/jobs/:bookingId/start`
-- `POST /api/field/jobs/:bookingId/notes`
 - `POST /api/field/jobs/:bookingId/complete`
-- `GET /api/field/jobs/:bookingId/report`
-- `GET|POST /api/tenant/staff`
-- `POST /api/attendance/check-in`
-- `POST /api/attendance/check-out`
-- `GET|POST /api/invoices`
+- `GET /api/invoices`
 - `POST /api/invoices/:id/payment-link`
-- `GET /api/invoices/:id/html`
 - `GET /api/payments`
-- `POST /api/payments/:id/receipt`
-- `POST /api/payments/mock-checkout/:id/success`
-- `POST /api/webhooks/stripe`
-- `GET|PATCH /api/actions`
-- `POST /api/workflows/scan-overdue-invoices`
-- `POST /api/workflows/scan-lost-revenue`
-- `POST /api/scheduler/run-now`
-- `GET|POST /api/messages`
-- `GET|POST /api/automations`
-- `POST /api/receptionist/inquiry`
-- `GET|PATCH /api/receptionist/config`
-- `GET /api/receptionist/conversations`
-- `GET /api/receptionist/conversations/:id`
-- `POST /api/receptionist/conversations/:id/handoff`
-- `GET|PATCH /api/inbox/:id`
+- `GET /api/actions`
 - `GET /api/inbox`
-- `POST /api/inbox/:id/reply`
-- `POST /api/inbox/:id/ai-suggest`
-- `POST /api/inbox/:id/actions`
-- `POST /api/inbox/:id/booking-intents`
+- `POST /api/inbox/:id/booking-intents/:intentId/book`
+- `POST /api/receptionist/inquiry`
+- `GET /api/webhooks/whatsapp/status`
+- `GET /api/webhooks/whatsapp/events`
+- `GET /api/automations/runs`
 
-Every protected endpoint is tenant-scoped from the JWT payload.
+## Production Notes
 
-## Production Hardening
+Read:
 
-- Rate limiting is enabled by default with `RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW_MS`.
-- WhatsApp webhook signatures are enforced when `WHATSAPP_APP_SECRET` is set.
-- Stripe webhook signatures are enforced when `STRIPE_WEBHOOK_SECRET` is set.
-- Scheduled operational scans run only when `ENABLE_SCHEDULER=true`.
-- `GET /api/health` checks API and database readiness.
+- [Launch Checklist](docs/LAUNCH_CHECKLIST.md)
+- [Demo Script](docs/DEMO_SCRIPT.md)
+
+Important:
+
+- Do not run demo seed against production customer data.
+- Use a long random `JWT_SECRET`.
+- Set `WHATSAPP_APP_SECRET` so WhatsApp webhook signatures are enforced.
+- Set `STRIPE_WEBHOOK_SECRET` so Stripe webhook signatures are enforced.
+- Turn on the scheduler only when you want automated operational scans.
+- Use `/api/health` and `./scripts/smoke.sh` after deployment.
