@@ -14,6 +14,7 @@ import { FieldOpsModule } from './field-ops/field-ops.module';
 import { HealthModule } from './health/health.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { InboxModule } from './inbox/inbox.module';
+import { LeadsModule } from './leads/leads.module';
 import { MessagesModule } from './messages/messages.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -42,6 +43,7 @@ import { WorkflowsModule } from './workflows/workflows.module';
     AttendanceModule,
     InvoicesModule,
     InboxModule,
+    LeadsModule,
     PaymentsModule,
     MessagesModule,
     AutomationsModule,

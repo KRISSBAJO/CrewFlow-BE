@@ -94,6 +94,26 @@ enum BookingIntentStatus {
   CANCELLED
 }
 
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  BOOKING_READY
+  WON
+  LOST
+}
+
+enum LeadSource {
+  AI_RECEPTIONIST
+  WEB_CHAT
+  WHATSAPP
+  SMS
+  EMAIL
+  PHONE
+  REFERRAL
+  MANUAL
+}
+
 enum PaymentProvider {
   STRIPE
   MOCK
@@ -165,6 +185,7 @@ model Tenant {
   conversations        Conversation[]
   conversationMessages ConversationMessage[]
   bookingIntents       BookingIntent[]
+  leads                Lead[]
   auditLogs            AuditLog[]
   onboardingProfile    OnboardingProfile?
 }
@@ -203,6 +224,7 @@ model User {
   assignedActions        OperationalAction[] @relation("ActionAssignee")
   assignedConversations  Conversation[]      @relation("ConversationAssignee")
   completedJobReports    FieldJobReport[]    @relation("JobReportCompletedBy")
+  assignedLeads          Lead[]              @relation("LeadAssignee")
   auditLogs              AuditLog[]
   handedOffConversations Conversation[]      @relation("ConversationHandoff")
 
@@ -226,6 +248,7 @@ model Customer {
   automationRuns     AutomationRun[]
   conversations      Conversation[]
   bookingIntents     BookingIntent[]
+  leads              Lead[]
   operationalActions OperationalAction[]
 
   @@unique([tenantId, phone])
@@ -270,6 +293,7 @@ model Booking {
   invoice            Invoice?
   automationRuns     AutomationRun[]
   bookingIntents     BookingIntent[]
+  leads              Lead[]
   operationalActions OperationalAction[]
   fieldJobReport     FieldJobReport?
 
@@ -537,6 +561,7 @@ model Conversation {
   handedOffTo    User?                 @relation("ConversationHandoff", fields: [handedOffToId], references: [id])
   messages       ConversationMessage[]
   bookingIntents BookingIntent[]
+  leads          Lead[]
 
   @@index([tenantId, status, lastMessageAt])
   @@index([tenantId, customerId])
@@ -577,9 +602,41 @@ model BookingIntent {
   customer         Customer?           @relation(fields: [customerId], references: [id])
   service          Service?            @relation(fields: [serviceId], references: [id])
   booking          Booking?            @relation(fields: [bookingId], references: [id])
+  lead             Lead?
 
   @@index([tenantId, status])
   @@index([tenantId, conversationId])
+}
+
+model Lead {
+  id                    String         @id @default(cuid())
+  tenantId              String
+  customerId            String?
+  conversationId        String?
+  bookingIntentId       String?        @unique
+  bookingId             String?
+  assignedToId          String?
+  status                LeadStatus     @default(NEW)
+  source                LeadSource     @default(MANUAL)
+  title                 String
+  estimatedValueCents   Int?
+  conversionProbability Int            @default(25)
+  followUpAt            DateTime?
+  wonLostReason         String?
+  notes                 String?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  tenant                Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer              Customer?      @relation(fields: [customerId], references: [id])
+  conversation          Conversation?  @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  bookingIntent         BookingIntent? @relation(fields: [bookingIntentId], references: [id], onDelete: SetNull)
+  booking               Booking?       @relation(fields: [bookingId], references: [id])
+  assignedTo            User?          @relation("LeadAssignee", fields: [assignedToId], references: [id])
+
+  @@index([tenantId, status, followUpAt])
+  @@index([tenantId, source])
+  @@index([tenantId, assignedToId])
+  @@index([tenantId, customerId])
 }
 
 model AuditLog {

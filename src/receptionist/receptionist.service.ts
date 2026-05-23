@@ -10,6 +10,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/current-user.decorator';
 import { assertManager } from '../common/permissions';
+import { LeadsService } from '../leads/leads.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AiReceptionistService } from './ai-receptionist.service';
 import { HandoffConversationDto } from './dto/handoff-conversation.dto';
@@ -29,6 +30,7 @@ export class ReceptionistService {
     private readonly prisma: PrismaService,
     private readonly ai: AiReceptionistService,
     private readonly audit: AuditService,
+    private readonly leads: LeadsService,
   ) {}
 
   getConfig(tenantId: string) {
@@ -221,6 +223,19 @@ export class ReceptionistService {
         quotedPriceCents: matchedService?.priceCents,
         missingFields,
       },
+    });
+    await this.leads.upsertFromAutomation({
+      tenantId,
+      customerId: customer?.id,
+      conversationId: conversation.id,
+      bookingIntentId: bookingIntent.id,
+      source: this.leads.sourceFromProvider(dto.channel ?? MessageProvider.WEB_CHAT),
+      serviceTitle: matchedService?.title,
+      customerName: customer?.name ?? dto.customerName,
+      estimatedValueCents: matchedService?.priceCents,
+      intentStatus: bookingIntent.status,
+      missingFields,
+      notes: intentData.notes,
     });
 
     await this.recordConversationMessage(

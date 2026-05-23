@@ -8,6 +8,8 @@ import {
   ConversationMessageRole,
   ConversationStatus,
   InvoiceStatus,
+  LeadSource,
+  LeadStatus,
   MessageDirection,
   MessageProvider,
   PrismaClient,
@@ -155,6 +157,9 @@ async function main() {
   });
   await prisma.operationalAction.deleteMany({
     where: { tenantId: tenant.id, source: 'seed' },
+  });
+  await prisma.lead.deleteMany({
+    where: { tenantId: tenant.id },
   });
   await prisma.bookingIntent.deleteMany({
     where: { tenantId: tenant.id, conversation: { channel: MessageProvider.WEB_CHAT } },
@@ -316,7 +321,7 @@ async function main() {
     },
   });
 
-  await prisma.bookingIntent.create({
+  const bookingIntent = await prisma.bookingIntent.create({
     data: {
       tenantId: tenant.id,
       conversationId: conversation.id,
@@ -329,6 +334,59 @@ async function main() {
       quotedPriceCents: deepClean.priceCents,
       missingFields: [],
     },
+  });
+
+  await prisma.lead.createMany({
+    data: [
+      {
+        tenantId: tenant.id,
+        customerId: leadCustomer.id,
+        conversationId: conversation.id,
+        bookingIntentId: bookingIntent.id,
+        assignedToId: manager.id,
+        status: LeadStatus.BOOKING_READY,
+        source: LeadSource.WEB_CHAT,
+        title: `${deepClean.title} for ${leadCustomer.name}`,
+        estimatedValueCents: deepClean.priceCents,
+        conversionProbability: 85,
+        followUpAt: new Date(today.getTime() + 2 * 60 * 60_000),
+        notes: 'Hot web-chat lead. Needs manager confirmation.',
+      },
+      {
+        tenantId: tenant.id,
+        customerId: overdueCustomer.id,
+        bookingId: completedBooking.id,
+        assignedToId: manager.id,
+        status: LeadStatus.WON,
+        source: LeadSource.REFERRAL,
+        title: `${standardClean.title} won from referral`,
+        estimatedValueCents: standardClean.priceCents,
+        conversionProbability: 100,
+        wonLostReason: 'Converted to completed recurring clean.',
+        notes: 'Demo won lead for lead-to-booking analytics.',
+      },
+      {
+        tenantId: tenant.id,
+        assignedToId: manager.id,
+        status: LeadStatus.CONTACTED,
+        source: LeadSource.PHONE,
+        title: 'Recurring office cleaning inquiry',
+        estimatedValueCents: 69900,
+        conversionProbability: 45,
+        followUpAt: new Date(today.getTime() - 60 * 60_000),
+        notes: 'Needs callback about weekend availability.',
+      },
+      {
+        tenantId: tenant.id,
+        status: LeadStatus.LOST,
+        source: LeadSource.MANUAL,
+        title: 'Post-renovation clean outside service area',
+        estimatedValueCents: 39900,
+        conversionProbability: 0,
+        wonLostReason: 'Outside current service area.',
+        notes: 'Useful lost reason example.',
+      },
+    ],
   });
 
   await prisma.operationalAction.createMany({

@@ -17,6 +17,7 @@ import { AuditService } from '../audit/audit.service';
 import { BookingsService } from '../bookings/bookings.service';
 import { AuthUser } from '../common/current-user.decorator';
 import { assertManager } from '../common/permissions';
+import { LeadsService } from '../leads/leads.service';
 import { MessageProviderService } from '../messaging/message-provider.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { BookBookingIntentDto } from './dto/book-booking-intent.dto';
@@ -34,6 +35,7 @@ export class InboxService {
     private readonly ai: InboxAiService,
     private readonly audit: AuditService,
     private readonly bookings: BookingsService,
+    private readonly leads: LeadsService,
   ) {}
 
   findAll(
@@ -322,6 +324,20 @@ export class InboxService {
       },
       include: { service: true, customer: true },
     });
+    await this.leads.upsertFromAutomation({
+      tenantId: user.tenantId,
+      customerId: conversation.customerId,
+      conversationId: id,
+      bookingIntentId: intent.id,
+      assignedToId: conversation.assignedToId ?? user.sub,
+      source: this.leads.sourceFromProvider(conversation.channel),
+      serviceTitle: intent.service?.title,
+      customerName: conversation.customer?.name,
+      estimatedValueCents: intent.service?.priceCents,
+      intentStatus: intent.status,
+      missingFields,
+      notes: intent.notes,
+    });
 
     await this.prisma.conversation.update({
       where: { id },
@@ -410,6 +426,21 @@ export class InboxService {
         },
       }),
     ]);
+    await this.leads.upsertFromAutomation({
+      tenantId: user.tenantId,
+      customerId: intent.customerId,
+      conversationId,
+      bookingIntentId: intent.id,
+      bookingId: booking.id,
+      assignedToId: intent.conversation.assignedToId ?? user.sub,
+      source: this.leads.sourceFromProvider(intent.conversation.channel),
+      serviceTitle: intent.service?.title,
+      customerName: intent.conversation.customer.name,
+      estimatedValueCents: intent.service?.priceCents,
+      intentStatus: BookingIntentStatus.BOOKED,
+      missingFields: [],
+      notes: intent.notes,
+    });
 
     await this.audit.record({
       tenantId: user.tenantId,
