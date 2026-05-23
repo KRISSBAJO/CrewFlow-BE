@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   ActionPriority,
   ActionStatus,
+  ActionType,
   BookingIntentStatus,
   BookingStatus,
   ConversationStatus,
@@ -37,6 +38,8 @@ export class DashboardService {
       staleLeads,
       hotLeadValue,
       completedUnpaid,
+      repeatBookingActions,
+      winBackActions,
     ] = await Promise.all([
       this.prisma.booking.findMany({
         where: { tenantId, startTime: { gte: start, lte: end } },
@@ -165,6 +168,20 @@ export class DashboardService {
           OR: [{ invoice: null }, { invoice: { status: { not: InvoiceStatus.PAID } } }],
         },
       }),
+      this.prisma.operationalAction.count({
+        where: {
+          tenantId,
+          type: ActionType.SUGGEST_REPEAT_BOOKING,
+          status: { in: [ActionStatus.OPEN, ActionStatus.IN_PROGRESS] },
+        },
+      }),
+      this.prisma.operationalAction.count({
+        where: {
+          tenantId,
+          type: ActionType.WIN_BACK_CUSTOMER,
+          status: { in: [ActionStatus.OPEN, ActionStatus.IN_PROGRESS] },
+        },
+      }),
     ]);
 
     const noShowRiskCents = noShows.reduce(
@@ -208,6 +225,8 @@ export class DashboardService {
           staleLeads,
           hotLeadValueCents: hotLeadValue._sum.estimatedValueCents ?? 0,
           completedUnpaid,
+          repeatBookingActions,
+          winBackActions,
         }),
       },
     };
@@ -225,6 +244,8 @@ export class DashboardService {
     staleLeads: number;
     hotLeadValueCents: number;
     completedUnpaid: number;
+    repeatBookingActions: number;
+    winBackActions: number;
   }) {
     const alerts: Array<{
       key: string;
@@ -290,6 +311,22 @@ export class DashboardService {
         severity: 'warning',
         title: 'Customer conversations need follow-up',
         value: input.staleConversations,
+      });
+    }
+    if (input.winBackActions > 0) {
+      alerts.push({
+        key: 'winback-customers',
+        severity: 'warning',
+        title: 'Inactive customers are ready for win-back',
+        value: input.winBackActions,
+      });
+    }
+    if (input.repeatBookingActions > 0) {
+      alerts.push({
+        key: 'repeat-bookings',
+        severity: 'info',
+        title: 'Customers are ready to rebook',
+        value: input.repeatBookingActions,
       });
     }
     if (input.noShowRiskCents > 0) {

@@ -132,6 +132,30 @@ async function main() {
     },
   });
 
+  const repeatCustomer = await prisma.customer.upsert({
+    where: { tenantId_phone: { tenantId: tenant.id, phone: '+15550105050' } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      name: 'Elena Brooks',
+      phone: '+15550105050',
+      email: 'elena@example.com',
+      notes: 'Good recurring candidate. Usually books every 3 weeks.',
+    },
+  });
+
+  const winBackCustomer = await prisma.customer.upsert({
+    where: { tenantId_phone: { tenantId: tenant.id, phone: '+15550106060' } },
+    update: {},
+    create: {
+      tenantId: tenant.id,
+      name: 'Chris Morgan',
+      phone: '+15550106060',
+      email: 'chris@example.com',
+      notes: 'High-value inactive customer for win-back demo.',
+    },
+  });
+
   await prisma.receptionistConfig.upsert({
     where: { tenantId: tenant.id },
     create: {
@@ -251,6 +275,88 @@ async function main() {
     },
   });
 
+  const repeatDate = new Date(today);
+  repeatDate.setDate(repeatDate.getDate() - 21);
+  repeatDate.setHours(11, 0, 0, 0);
+  const repeatBooking = await prisma.booking.create({
+    data: {
+      tenantId: tenant.id,
+      customerId: repeatCustomer.id,
+      serviceId: standardClean.id,
+      assignedStaffId: staff.id,
+      startTime: repeatDate,
+      endTime: new Date(repeatDate.getTime() + standardClean.durationMinutes * 60_000),
+      status: BookingStatus.COMPLETED,
+      source: 'seed',
+      notes: 'Demo repeat-booking retention candidate.',
+    },
+  });
+
+  await prisma.invoice.create({
+    data: {
+      tenantId: tenant.id,
+      customerId: repeatCustomer.id,
+      bookingId: repeatBooking.id,
+      invoiceNo: 'INV-DEMO-003',
+      subtotalCents: standardClean.priceCents,
+      taxCents: 0,
+      totalCents: standardClean.priceCents,
+      dueDate: new Date(repeatDate.getTime() + 7 * 24 * 60 * 60_000),
+      status: InvoiceStatus.PAID,
+      paidAt: new Date(repeatDate.getTime() + 2 * 24 * 60 * 60_000),
+      lineItems: {
+        create: {
+          tenantId: tenant.id,
+          description: standardClean.title,
+          quantity: 1,
+          unitCents: standardClean.priceCents,
+          totalCents: standardClean.priceCents,
+        },
+      },
+    },
+  });
+
+  const winBackDate = new Date(today);
+  winBackDate.setDate(winBackDate.getDate() - 82);
+  winBackDate.setHours(9, 30, 0, 0);
+  const winBackBooking = await prisma.booking.create({
+    data: {
+      tenantId: tenant.id,
+      customerId: winBackCustomer.id,
+      serviceId: deepClean.id,
+      assignedStaffId: staff.id,
+      startTime: winBackDate,
+      endTime: new Date(winBackDate.getTime() + deepClean.durationMinutes * 60_000),
+      status: BookingStatus.COMPLETED,
+      source: 'seed',
+      notes: 'Demo inactive customer retention candidate.',
+    },
+  });
+
+  await prisma.invoice.create({
+    data: {
+      tenantId: tenant.id,
+      customerId: winBackCustomer.id,
+      bookingId: winBackBooking.id,
+      invoiceNo: 'INV-DEMO-004',
+      subtotalCents: deepClean.priceCents,
+      taxCents: 0,
+      totalCents: deepClean.priceCents,
+      dueDate: new Date(winBackDate.getTime() + 7 * 24 * 60 * 60_000),
+      status: InvoiceStatus.PAID,
+      paidAt: new Date(winBackDate.getTime() + 1 * 24 * 60 * 60_000),
+      lineItems: {
+        create: {
+          tenantId: tenant.id,
+          description: deepClean.title,
+          quantity: 1,
+          unitCents: deepClean.priceCents,
+          totalCents: deepClean.priceCents,
+        },
+      },
+    },
+  });
+
   const requestedTime = new Date(today);
   requestedTime.setDate(requestedTime.getDate() + 1);
   requestedTime.setHours(15, 0, 0, 0);
@@ -269,7 +375,7 @@ async function main() {
 
   await prisma.tenant.update({
     where: { id: tenant.id },
-    data: { invoiceCounter: 2 },
+    data: { invoiceCounter: 4 },
   });
 
   await prisma.messageLog.deleteMany({
@@ -455,6 +561,16 @@ async function main() {
       trigger: AutomationTrigger.LEAD_FOLLOW_UP,
       template:
         'Hi {{customerName}}, this is {{businessName}} following up on {{leadTitle}}. Would you like us to help get this scheduled?',
+    },
+    {
+      trigger: AutomationTrigger.REBOOKING_REMINDER,
+      template:
+        'Hi {{customerName}}, it may be a good time to schedule your next service with {{businessName}}. Reply here and we can find a convenient slot.',
+    },
+    {
+      trigger: AutomationTrigger.CUSTOMER_WINBACK,
+      template:
+        'Hi {{customerName}}, we have not seen you in a while. {{businessName}} would love to help with your next service when you are ready.',
     },
   ];
 

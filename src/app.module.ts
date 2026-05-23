@@ -19,6 +19,7 @@ import { MessagesModule } from './messages/messages.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ReceptionistModule } from './receptionist/receptionist.module';
+import { RetentionModule } from './retention/retention.module';
 import { ServicesModule } from './services/services.module';
 import { RateLimitGuard } from './security/rate-limit.guard';
 import { SchedulerModule } from './scheduler/scheduler.module';
@@ -49,6 +50,7 @@ import { WorkflowsModule } from './workflows/workflows.module';
     AutomationsModule,
     DashboardModule,
     ReceptionistModule,
+    RetentionModule,
     WebhooksModule,
     WorkflowsModule,
     SchedulerModule,

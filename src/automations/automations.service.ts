@@ -314,7 +314,10 @@ export class AutomationsService {
       leadProbability: lead?.conversionProbability,
       leadFollowUpAt: lead?.followUpAt,
       leadOwnerName: lead?.assignedTo?.name,
-      service: booking?.service.title ?? invoice?.booking?.service.title,
+      service:
+        booking?.service.title ??
+        invoice?.booking?.service.title ??
+        lead?.title,
       startTime: booking?.startTime,
       staffName: booking?.assignedStaff?.name,
       invoiceNo: invoice?.invoiceNo,
