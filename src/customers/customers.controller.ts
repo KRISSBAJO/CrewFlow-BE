@@ -13,6 +13,7 @@ import type { AuthUser } from '../common/current-user.decorator';
 import { Roles } from '../common/roles.decorator';
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
+import { ImportCustomersDto } from './dto/import-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 
 @Controller('customers')
@@ -23,6 +24,12 @@ export class CustomersController {
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateCustomerDto) {
     return this.customers.create(user.tenantId, dto);
+  }
+
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
+  @Post('import')
+  import(@CurrentUser() user: AuthUser, @Body() dto: ImportCustomersDto) {
+    return this.customers.import(user.tenantId, dto.customers);
   }
 
   @Get()

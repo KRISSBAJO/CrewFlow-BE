@@ -33,9 +33,30 @@ export class TenantsService {
     });
   }
 
-  getOnboarding(tenantId: string) {
-    return this.prisma.onboardingProfile.findUniqueOrThrow({
+  async getOnboarding(tenantId: string) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      include: {
+        users: {
+          where: { role: UserRole.OWNER },
+          orderBy: { createdAt: 'asc' },
+          take: 1,
+        },
+      },
+    });
+    const owner = tenant.users[0];
+
+    return this.prisma.onboardingProfile.upsert({
       where: { tenantId },
+      create: {
+        tenantId,
+        ownerName: owner?.name ?? 'Owner',
+        ownerEmail: owner?.email ?? 'owner@example.com',
+        ownerPhone: owner?.phone,
+        setupStatus: 'IN_PROGRESS',
+        source: 'settings',
+      },
+      update: {},
     });
   }
 

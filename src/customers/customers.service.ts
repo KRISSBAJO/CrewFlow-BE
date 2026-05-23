@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
+import { ImportCustomerRowDto } from './dto/import-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 
 @Injectable()
@@ -9,6 +10,68 @@ export class CustomersService {
 
   create(tenantId: string, dto: CreateCustomerDto) {
     return this.prisma.customer.create({ data: { ...dto, tenantId } });
+  }
+
+  async import(tenantId: string, customers: ImportCustomerRowDto[]) {
+    const rows = customers
+      .map((customer) => ({
+        name: customer.name.trim(),
+        phone: customer.phone.trim(),
+        email: customer.email?.trim() || undefined,
+        notes: customer.notes?.trim() || undefined,
+      }))
+      .filter((customer) => customer.name && customer.phone)
+      .slice(0, 500);
+
+    let created = 0;
+    let updated = 0;
+    let skipped = customers.length - rows.length;
+    const results: Array<{
+      phone: string;
+      status: 'created' | 'updated' | 'skipped';
+      id?: string;
+      reason?: string;
+    }> = [];
+    const seen = new Set<string>();
+
+    for (const row of rows) {
+      if (seen.has(row.phone)) {
+        skipped += 1;
+        results.push({
+          phone: row.phone,
+          status: 'skipped',
+          reason: 'Duplicate phone in import',
+        });
+        continue;
+      }
+      seen.add(row.phone);
+
+      const existing = await this.prisma.customer.findUnique({
+        where: { tenantId_phone: { tenantId, phone: row.phone } },
+        select: { id: true },
+      });
+
+      const customer = await this.prisma.customer.upsert({
+        where: { tenantId_phone: { tenantId, phone: row.phone } },
+        create: { ...row, tenantId },
+        update: {
+          name: row.name,
+          email: row.email,
+          notes: row.notes,
+        },
+        select: { id: true },
+      });
+
+      if (existing) {
+        updated += 1;
+        results.push({ phone: row.phone, status: 'updated', id: customer.id });
+      } else {
+        created += 1;
+        results.push({ phone: row.phone, status: 'created', id: customer.id });
+      }
+    }
+
+    return { created, updated, skipped, total: customers.length, results };
   }
 
   findAll(tenantId: string, search?: string) {
