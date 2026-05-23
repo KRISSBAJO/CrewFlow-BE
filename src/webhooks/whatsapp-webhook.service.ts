@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   MessageDirection,
@@ -9,6 +9,7 @@ import {
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SignatureService } from '../security/signature.service';
 
 type ExtractedWhatsAppMessage = {
   providerEventId?: string;
@@ -23,6 +24,7 @@ export class WhatsappWebhookService {
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly signatures: SignatureService,
   ) {}
 
   verify(mode?: string, token?: string) {
@@ -37,7 +39,22 @@ export class WhatsappWebhookService {
     payload: Record<string, unknown>,
     tenantSlug?: string,
     signature?: string,
+    rawBody?: string,
   ) {
+    const signatureSecret = this.config.get<string>('WHATSAPP_APP_SECRET');
+    const signatureVerified = signatureSecret
+      ? this.signatures.verifyHmacSha256({
+          secret: signatureSecret,
+          payload: rawBody ?? JSON.stringify(payload),
+          signature,
+          prefix: 'sha256=',
+        })
+      : null;
+
+    if (signatureSecret && !signatureVerified) {
+      throw new UnauthorizedException('Invalid WhatsApp webhook signature');
+    }
+
     const tenant = tenantSlug
       ? await this.prisma.tenant.findUnique({ where: { slug: tenantSlug } })
       : await this.prisma.tenant.findFirst({ orderBy: { createdAt: 'asc' } });
@@ -98,6 +115,7 @@ export class WhatsappWebhookService {
           webhookEventId: event.id,
           providerEventId: message.providerEventId,
           signaturePresent: Boolean(signature),
+          signatureVerified,
         },
       },
     });

@@ -3,11 +3,15 @@ import {
   Controller,
   Get,
   Header,
+  Headers,
   Param,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
+import type { RawBodyRequest } from '@nestjs/common';
 import { PaymentStatus, UserRole } from '@prisma/client';
+import type { Request } from 'express';
 import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
 import { Public } from '../common/public.decorator';
@@ -79,7 +83,15 @@ export class PaymentsController {
 
   @Public()
   @Post('webhooks/stripe')
-  handleStripeWebhook(@Body() payload: unknown) {
-    return this.payments.handleStripeWebhook(payload);
+  handleStripeWebhook(
+    @Body() payload: unknown,
+    @Headers('stripe-signature') signature?: string,
+    @Req() request?: RawBodyRequest<Request>,
+  ) {
+    return this.payments.handleStripeWebhook(
+      payload,
+      signature,
+      request?.rawBody?.toString('utf8'),
+    );
   }
 }

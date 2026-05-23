@@ -2,7 +2,9 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   InvoiceStatus,
   MessageDirection,
@@ -19,6 +21,7 @@ import { AuthUser } from '../common/current-user.decorator';
 import { assertManager } from '../common/permissions';
 import { MessageProviderService } from '../messaging/message-provider.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SignatureService } from '../security/signature.service';
 import { CreatePaymentLinkDto } from './dto/create-payment-link.dto';
 import { SendReceiptDto } from './dto/send-receipt.dto';
 
@@ -35,6 +38,8 @@ export class PaymentsService {
     private readonly audit: AuditService,
     private readonly automations: AutomationsService,
     private readonly messageProvider: MessageProviderService,
+    private readonly config: ConfigService,
+    private readonly signatures: SignatureService,
   ) {}
 
   findAll(user: AuthUser, status?: PaymentStatus) {
@@ -243,7 +248,24 @@ export class PaymentsService {
     });
   }
 
-  async handleStripeWebhook(payload: unknown) {
+  async handleStripeWebhook(
+    payload: unknown,
+    signature?: string,
+    rawBody?: string,
+  ) {
+    const webhookSecret = this.config.get<string>('STRIPE_WEBHOOK_SECRET');
+    const signatureVerified = webhookSecret
+      ? this.signatures.verifyStripeSignature({
+          secret: webhookSecret,
+          rawBody: rawBody ?? JSON.stringify(payload),
+          signature,
+        })
+      : null;
+
+    if (webhookSecret && !signatureVerified) {
+      throw new UnauthorizedException('Invalid Stripe webhook signature');
+    }
+
     const body = this.asRecord(payload);
     const providerEventId =
       this.stringField(body, 'id') ?? `stripe-${Date.now()}`;
@@ -253,7 +275,10 @@ export class PaymentsService {
         provider: WebhookProvider.STRIPE,
         providerEventId,
         status: WebhookEventStatus.RECEIVED,
-        payload: body as Prisma.InputJsonValue,
+        payload: {
+          ...body,
+          crewflowSignatureVerified: signatureVerified,
+        },
       },
     });
 

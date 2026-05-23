@@ -40,6 +40,7 @@ owner@sparkle.test / Password123!
 
 - `POST /api/auth/register`
 - `POST /api/auth/login`
+- `GET /api/health`
 - `GET /api/dashboard`
 - `GET|POST /api/customers`
 - `GET /api/customers/:id/timeline`
@@ -67,6 +68,7 @@ owner@sparkle.test / Password123!
 - `GET|PATCH /api/actions`
 - `POST /api/workflows/scan-overdue-invoices`
 - `POST /api/workflows/scan-lost-revenue`
+- `POST /api/scheduler/run-now`
 - `GET|POST /api/messages`
 - `GET|POST /api/automations`
 - `POST /api/receptionist/inquiry`
@@ -82,3 +84,11 @@ owner@sparkle.test / Password123!
 - `POST /api/inbox/:id/booking-intents`
 
 Every protected endpoint is tenant-scoped from the JWT payload.
+
+## Production Hardening
+
+- Rate limiting is enabled by default with `RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW_MS`.
+- WhatsApp webhook signatures are enforced when `WHATSAPP_APP_SECRET` is set.
+- Stripe webhook signatures are enforced when `STRIPE_WEBHOOK_SECRET` is set.
+- Scheduled operational scans run only when `ENABLE_SCHEDULER=true`.
+- `GET /api/health` checks API and database readiness.
