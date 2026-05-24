@@ -32,6 +32,11 @@ export class UpdateTenantSettingsDto {
   @IsString()
   coverImageUrl?: string;
 
+  @ApiPropertyOptional({ example: '#0f766e' })
+  @IsOptional()
+  @IsString()
+  brandColor?: string;
+
   @ApiPropertyOptional({ example: '+15551234567' })
   @IsOptional()
   @IsString()

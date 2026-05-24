@@ -38,6 +38,7 @@ async function main() {
       subscriptionPlan: 'platform',
       logoUrl:
         'https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=400&q=80',
+      brandColor: '#0f766e',
     },
     create: {
       businessName: 'CrewFlow Platform',
@@ -48,6 +49,7 @@ async function main() {
       subscriptionPlan: 'platform',
       logoUrl:
         'https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=400&q=80',
+      brandColor: '#0f766e',
     },
   });
 
@@ -109,6 +111,7 @@ async function main() {
         'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=400&q=80',
       coverImageUrl:
         'https://images.unsplash.com/photo-1527515637462-cff94eecc1ac?auto=format&fit=crop&w=1400&q=80',
+      brandColor: '#0f766e',
       monthlyPriceCents: 29900,
       setupFeeCents: 100000,
       currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60_000),
@@ -137,6 +140,7 @@ async function main() {
         'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=400&q=80',
       coverImageUrl:
         'https://images.unsplash.com/photo-1527515637462-cff94eecc1ac?auto=format&fit=crop&w=1400&q=80',
+      brandColor: '#0f766e',
       monthlyPriceCents: 29900,
       setupFeeCents: 100000,
       currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60_000),

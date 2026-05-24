@@ -41,6 +41,7 @@ export class TenantsService {
         industry: true,
         logoUrl: true,
         coverImageUrl: true,
+        brandColor: true,
         subscriptionPlan: true,
         subscriptionStatus: true,
         billingEmail: true,
@@ -330,6 +331,7 @@ export class TenantsService {
           ...(dto.industry ? { industry: dto.industry.trim() } : {}),
           logoUrl: dto.logoUrl?.trim(),
           coverImageUrl: dto.coverImageUrl?.trim(),
+          brandColor: dto.brandColor?.trim(),
         },
         select: {
           id: true,
@@ -338,6 +340,7 @@ export class TenantsService {
           industry: true,
           logoUrl: true,
           coverImageUrl: true,
+          brandColor: true,
           subscriptionPlan: true,
           createdAt: true,
         },

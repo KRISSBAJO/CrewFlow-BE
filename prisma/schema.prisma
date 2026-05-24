@@ -219,6 +219,7 @@ model Tenant {
   subscriptionPlan     String                  @default("pilot")
   logoUrl              String?
   coverImageUrl        String?
+  brandColor           String?
   billingEmail         String?
   monthlyPriceCents    Int?
   setupFeeCents        Int?

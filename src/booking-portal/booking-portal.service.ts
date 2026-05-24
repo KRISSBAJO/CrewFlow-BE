@@ -54,6 +54,9 @@ export class BookingPortalService {
         slug: tenant.slug,
         industry: tenant.industry,
         status: tenant.status,
+        logoUrl: tenant.logoUrl,
+        coverImageUrl: tenant.coverImageUrl,
+        brandColor: tenant.brandColor,
       },
       booking: {
         paymentEnabled: true,
@@ -74,6 +77,7 @@ export class BookingPortalService {
         id: service.id,
         title: service.title,
         description: service.description,
+        imageUrl: service.imageUrl,
         durationMinutes: service.durationMinutes,
         priceCents: service.priceCents,
       })),
@@ -207,6 +211,9 @@ export class BookingPortalService {
             slug: true,
             industry: true,
             status: true,
+            logoUrl: true,
+            coverImageUrl: true,
+            brandColor: true,
           },
         },
         customer: {
@@ -247,6 +254,9 @@ export class BookingPortalService {
             slug: true,
             industry: true,
             status: true,
+            logoUrl: true,
+            coverImageUrl: true,
+            brandColor: true,
           },
         },
         customer: {
