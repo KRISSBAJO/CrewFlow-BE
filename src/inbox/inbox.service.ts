@@ -10,6 +10,7 @@ import {
   BookingIntentStatus,
   ConversationMessageRole,
   ConversationStatus,
+  LeadStatus,
   MessageDirection,
   MessageProvider,
 } from '@prisma/client';
@@ -19,11 +20,15 @@ import { AuthUser } from '../common/current-user.decorator';
 import { assertManager } from '../common/permissions';
 import { LeadsService } from '../leads/leads.service';
 import { MessageProviderService } from '../messaging/message-provider.service';
+import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { BookBookingIntentDto } from './dto/book-booking-intent.dto';
+import { ConvertConversationLeadDto } from './dto/convert-conversation-lead.dto';
 import { CreateActionFromConversationDto } from './dto/create-action-from-conversation.dto';
 import { CreateBookingIntentFromConversationDto } from './dto/create-booking-intent-from-conversation.dto';
 import { ReplyConversationDto } from './dto/reply-conversation.dto';
+import { SendConversationInvoiceDto } from './dto/send-conversation-invoice.dto';
+import { SendConversationQuoteDto } from './dto/send-conversation-quote.dto';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { InboxAiService } from './inbox-ai.service';
 
@@ -36,6 +41,7 @@ export class InboxService {
     private readonly audit: AuditService,
     private readonly bookings: BookingsService,
     private readonly leads: LeadsService,
+    private readonly payments: PaymentsService,
   ) {}
 
   findAll(
@@ -63,6 +69,11 @@ export class InboxService {
           take: 1,
           include: { service: true },
         },
+        leads: {
+          orderBy: { updatedAt: 'desc' },
+          take: 1,
+          include: { booking: true },
+        },
       },
       orderBy: [{ followUpAt: 'asc' }, { lastMessageAt: 'desc' }],
       take: 100,
@@ -80,6 +91,7 @@ export class InboxService {
         },
         messages: { orderBy: { createdAt: 'asc' } },
         bookingIntents: { include: { service: true, booking: true } },
+        leads: { include: { booking: true, assignedTo: true } },
       },
     });
   }
@@ -235,6 +247,166 @@ export class InboxService {
     });
 
     return suggestion;
+  }
+
+  async convertToLead(
+    user: AuthUser,
+    id: string,
+    dto: ConvertConversationLeadDto,
+  ) {
+    assertManager(user);
+    const conversation = await this.prisma.conversation.findFirst({
+      where: { id, tenantId: user.tenantId },
+      include: {
+        customer: true,
+        bookingIntents: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: { service: true },
+        },
+      },
+    });
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+    const intent = conversation.bookingIntents[0];
+    const lead = await this.leads.create(user, {
+      title:
+        dto.title ??
+        intent?.service?.title ??
+        `${conversation.customer?.name ?? 'Customer'} WhatsApp inquiry`,
+      status: dto.status ?? LeadStatus.QUALIFIED,
+      source: this.leads.sourceFromProvider(conversation.channel),
+      customerId: conversation.customerId ?? undefined,
+      conversationId: conversation.id,
+      assignedToId: conversation.assignedToId ?? user.sub,
+      estimatedValueCents:
+        dto.estimatedValueCents ??
+        intent?.quotedPriceCents ??
+        intent?.service?.priceCents,
+      conversionProbability: dto.conversionProbability ?? 65,
+      followUpAt: dto.followUpAt,
+      notes:
+        dto.notes ??
+        [
+          intent?.preferredWindow
+            ? `Preferred: ${intent.preferredWindow}`
+            : null,
+          intent?.address ? `Address: ${intent.address}` : null,
+          intent?.notes,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+    });
+
+    await this.prisma.conversation.update({
+      where: { id },
+      data: {
+        status: ConversationStatus.BOOKING_READY,
+        assignedToId: conversation.assignedToId ?? user.sub,
+      },
+    });
+
+    await this.prisma.conversationMessage.create({
+      data: {
+        tenantId: user.tenantId,
+        conversationId: id,
+        role: ConversationMessageRole.SYSTEM,
+        content: `Lead created: ${lead.title}.`,
+        metadata: { leadId: lead.id },
+      },
+    });
+
+    return lead;
+  }
+
+  async sendQuote(user: AuthUser, id: string, dto: SendConversationQuoteDto) {
+    assertManager(user);
+    const [conversation, service, tenant] = await Promise.all([
+      this.prisma.conversation.findFirst({
+        where: { id, tenantId: user.tenantId },
+        include: { customer: true },
+      }),
+      this.prisma.service.findFirst({
+        where: { id: dto.serviceId, tenantId: user.tenantId, active: true },
+      }),
+      this.prisma.tenant.findUniqueOrThrow({ where: { id: user.tenantId } }),
+    ]);
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+    if (!service) {
+      throw new BadRequestException('Service does not belong to this tenant');
+    }
+    const content = [
+      `Hi ${conversation.customer?.name ?? 'there'}, ${service.title} with ${tenant.businessName} starts at $${(service.priceCents / 100).toFixed(2)} and usually takes about ${service.durationMinutes} minutes.`,
+      'Final pricing may change after confirming job details.',
+      dto.note,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    const [reply] = await Promise.all([
+      this.reply(user, id, { content, provider: conversation.channel }),
+      this.createBookingIntent(user, id, {
+        serviceId: service.id,
+        notes: dto.note,
+      }),
+    ]);
+
+    return reply;
+  }
+
+  async sendInvoiceLink(
+    user: AuthUser,
+    id: string,
+    dto: SendConversationInvoiceDto,
+  ) {
+    assertManager(user);
+    const conversation = await this.prisma.conversation.findFirst({
+      where: { id, tenantId: user.tenantId },
+      include: { customer: true },
+    });
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+    const result = await this.payments.createInvoicePaymentLink(
+      user,
+      dto.invoiceId,
+      {
+        provider: dto.provider,
+      },
+    );
+    if (result.invoice.customerId !== conversation.customerId) {
+      throw new BadRequestException(
+        'Invoice customer does not match conversation customer',
+      );
+    }
+
+    const content = [
+      dto.note ??
+        `Here is your payment link for invoice ${result.invoice.invoiceNo}.`,
+      `Total: $${(result.invoice.totalCents / 100).toFixed(2)}.`,
+      result.invoice.paymentUrl,
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const reply = await this.reply(user, id, {
+      content,
+      provider: conversation.channel,
+    });
+
+    await this.audit.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'INBOX_PAYMENT_LINK_SENT',
+      entityType: 'Conversation',
+      entityId: id,
+      summary: `Sent invoice ${result.invoice.invoiceNo} payment link from inbox`,
+      metadata: { invoiceId: result.invoice.id, paymentId: result.payment.id },
+    });
+
+    return { ...result, reply };
   }
 
   async createAction(

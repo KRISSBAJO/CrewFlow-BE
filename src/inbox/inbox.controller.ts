@@ -12,9 +12,12 @@ import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
 import { Roles } from '../common/roles.decorator';
 import { BookBookingIntentDto } from './dto/book-booking-intent.dto';
+import { ConvertConversationLeadDto } from './dto/convert-conversation-lead.dto';
 import { CreateActionFromConversationDto } from './dto/create-action-from-conversation.dto';
 import { CreateBookingIntentFromConversationDto } from './dto/create-booking-intent-from-conversation.dto';
 import { ReplyConversationDto } from './dto/reply-conversation.dto';
+import { SendConversationInvoiceDto } from './dto/send-conversation-invoice.dto';
+import { SendConversationQuoteDto } from './dto/send-conversation-quote.dto';
 import { UpdateConversationDto } from './dto/update-conversation.dto';
 import { InboxService } from './inbox.service';
 
@@ -59,6 +62,33 @@ export class InboxController {
   @Post(':id/ai-suggest')
   suggestReply(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.inbox.suggestReply(user, id);
+  }
+
+  @Post(':id/lead')
+  convertToLead(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: ConvertConversationLeadDto,
+  ) {
+    return this.inbox.convertToLead(user, id, dto);
+  }
+
+  @Post(':id/quote')
+  sendQuote(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: SendConversationQuoteDto,
+  ) {
+    return this.inbox.sendQuote(user, id, dto);
+  }
+
+  @Post(':id/invoice-link')
+  sendInvoiceLink(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: SendConversationInvoiceDto,
+  ) {
+    return this.inbox.sendInvoiceLink(user, id, dto);
   }
 
   @Post(':id/actions')
