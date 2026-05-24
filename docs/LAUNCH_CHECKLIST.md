@@ -51,11 +51,23 @@ Payments:
 
 - [ ] `STRIPE_SECRET_KEY`
 - [ ] `STRIPE_WEBHOOK_SECRET`
+- [ ] `PAYSTACK_SECRET_KEY` if selling through Paystack
+- [ ] `PAYSTACK_CURRENCY` set to expected settlement currency, for example `NGN`
+- [ ] `PAYSTACK_PLATFORM_PLAN_CODE` if using Paystack platform subscriptions
+- [ ] `PAYSTACK_TENANT_PLAN_CODE` if using Paystack tenant subscriptions
 - [ ] `PAYMENT_SUCCESS_URL`
 - [ ] `PAYMENT_CANCEL_URL`
 - [ ] Stripe webhook URL points to `/api/webhooks/stripe`
 - [ ] Paystack webhook URL points to `/api/webhooks/paystack`
 - [ ] Payment success/cancel URLs point to the deployed frontend
+
+## Sales Packaging
+
+- [ ] Launch plan is positioned at `$199/mo + $300 setup`
+- [ ] Growth plan is positioned at `$349/mo + $750 setup`
+- [ ] Scale plan is positioned at `$499/mo + custom setup`
+- [ ] Setup includes services, staff, WhatsApp templates, payment flow, and first workflow configuration
+- [ ] Sales demo follows [Sales Operations Playbook](SALES_OPERATIONS_PLAYBOOK.md)
 
 ## Deployment Notes
 

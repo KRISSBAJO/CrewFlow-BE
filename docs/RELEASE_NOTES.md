@@ -14,6 +14,7 @@ This checkpoint covers the CrewFlow backend through the operational money-engine
 - Field job start, notes, checklist, completion, and reports
 - Invoice creation from completed work
 - Payment link and mock checkout flow
+- Stripe and Paystack payment provider support
 - Revenue-risk dashboard
 - Manager action queue
 - AI receptionist intake
@@ -24,7 +25,8 @@ This checkpoint covers the CrewFlow backend through the operational money-engine
 - Demo seed data
 - Launch checklist, demo script, and smoke script
 - Production readiness endpoint with sanitized deployment checks
-- Production environment validation for CORS, public API URL, Stripe, WhatsApp, numeric limits, and seed safety
+- Production environment validation for CORS, public API URL, Stripe, Paystack, WhatsApp, numeric limits, and seed safety
+- Sales operations playbook with pricing anchors, setup fee positioning, and demo-to-close workflow
 
 ### Demo Login
 
@@ -48,4 +50,5 @@ yarn seed
 - Do not run demo seed against production data.
 - Set `WHATSAPP_APP_SECRET` to enforce WhatsApp webhook signatures.
 - Set `STRIPE_WEBHOOK_SECRET` to enforce Stripe webhook signatures.
+- Configure Paystack when selling in Nigeria or Africa-focused markets.
 - Use `/api/health/readiness` and `scripts/smoke.sh` after deployment.

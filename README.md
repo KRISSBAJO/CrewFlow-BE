@@ -13,6 +13,7 @@ CrewFlow is built around operational pain: missed inquiries, booking chaos, staf
 - Swagger/OpenAPI
 - Meta WhatsApp Cloud API integration
 - Stripe/mock payment links
+- Paystack checkout for Nigeria and Africa
 - OpenAI-ready receptionist layer
 
 ## Local Setup
@@ -90,6 +91,10 @@ Payments:
 
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
+- `PAYSTACK_SECRET_KEY`
+- `PAYSTACK_CURRENCY`
+- `PAYSTACK_PLATFORM_PLAN_CODE`
+- `PAYSTACK_TENANT_PLAN_CODE`
 - `PAYMENT_SUCCESS_URL`
 - `PAYMENT_CANCEL_URL`
 
