@@ -10,6 +10,7 @@ import { BookingPortalModule } from './booking-portal/booking-portal.module';
 import { BookingsModule } from './bookings/bookings.module';
 import { RolesGuard } from './common/roles.guard';
 import { CustomersModule } from './customers/customers.module';
+import { CommunicationsModule } from './communications/communications.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { FieldOpsModule } from './field-ops/field-ops.module';
 import { HealthModule } from './health/health.module';
@@ -39,6 +40,7 @@ import { WorkflowsModule } from './workflows/workflows.module';
     AuthModule,
     AuditModule,
     TenantsModule,
+    CommunicationsModule,
     BookingPortalModule,
     CustomersModule,
     ServicesModule,
