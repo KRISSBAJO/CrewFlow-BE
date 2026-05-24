@@ -4,6 +4,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  ActionPriority,
+  ActionStatus,
+  ActionType,
   InvoiceStatus,
   MessageProvider,
   PaymentStatus,
@@ -292,6 +295,38 @@ export class CollectionsService {
     return { scannedAt: now.toISOString(), overdueMarked: result.count };
   }
 
+  async runAutomation(user: AuthUser) {
+    assertManager(user);
+    const now = new Date();
+    const [collectionResult, receiptResult, promiseResult] = await Promise.all([
+      this.runCollectionCadence(user, now),
+      this.runReceiptRecovery(user, now),
+      this.runPromiseFollowUps(user, now),
+    ]);
+
+    await this.audit.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'COLLECTION_AUTOMATION_RUN',
+      entityType: 'Invoice',
+      summary: `Ran collections automation: ${collectionResult.messagesSent} reminders, ${receiptResult.receiptsSent} receipts, ${promiseResult.actionsCreatedOrUpdated} promise follow-ups`,
+      metadata: {
+        collectionResult,
+        receiptResult,
+        promiseResult,
+      } as Prisma.InputJsonValue,
+    });
+
+    return {
+      scannedAt: now.toISOString(),
+      ...collectionResult,
+      receiptsSent: receiptResult.receiptsSent,
+      promiseFollowUpsCreatedOrUpdated: promiseResult.actionsCreatedOrUpdated,
+      receiptItems: receiptResult.items,
+      promiseItems: promiseResult.items,
+    };
+  }
+
   private async afterAction(
     user: AuthUser,
     invoiceId: string,
@@ -335,6 +370,330 @@ export class CollectionsService {
     });
 
     return { ...sent, message: updatedMessage };
+  }
+
+  private async runCollectionCadence(user: AuthUser, now: Date) {
+    const invoices = await this.prisma.invoice.findMany({
+      where: {
+        tenantId: user.tenantId,
+        status: { in: [InvoiceStatus.SENT, InvoiceStatus.OVERDUE] },
+      },
+      include: this.includeInvoice(),
+      orderBy: [{ dueDate: 'asc' }, { totalCents: 'desc' }],
+      take: 200,
+    });
+
+    const items: unknown[] = [];
+    let messagesSent = 0;
+    let actionsCreatedOrUpdated = 0;
+    let paymentLinksCreated = 0;
+
+    for (const invoice of invoices) {
+      const stage = this.collectionStage(invoice, now);
+      if (!stage) continue;
+
+      const alreadyRan = await this.hasAuditForStage(
+        user.tenantId,
+        invoice.id,
+        stage.key,
+      );
+      if (alreadyRan) continue;
+
+      const freshInvoice = invoice.paymentUrl
+        ? invoice
+        : (await this.payments.createInvoicePaymentLink(user, invoice.id, {}))
+            .invoice;
+      if (!invoice.paymentUrl) paymentLinksCreated += 1;
+
+      if (stage.sendMessage) {
+        const message = await this.sendCollectionMessage(user, freshInvoice, {
+          type: CollectionActionType.SEND_REMINDER,
+          provider: MessageProvider.WHATSAPP,
+          note: stage.note,
+        });
+        messagesSent += 1;
+        items.push({
+          invoiceId: freshInvoice.id,
+          invoiceNo: freshInvoice.invoiceNo,
+          stage: stage.key,
+          messageId: message.message.id,
+        });
+      }
+
+      if (stage.createAction) {
+        await this.upsertCollectionAction({
+          tenantId: user.tenantId,
+          invoice: freshInvoice,
+          priority: stage.priority,
+          title: stage.title,
+          description: stage.description,
+          dueAt: now,
+          idempotencyKey: `collections:${freshInvoice.id}:${stage.key}`,
+          metadata: {
+            stage: stage.key,
+            daysPastDue: this.daysPastDue(freshInvoice.dueDate),
+            totalCents: freshInvoice.totalCents,
+          },
+        });
+        actionsCreatedOrUpdated += 1;
+      }
+
+      await this.audit.record({
+        tenantId: user.tenantId,
+        actorId: user.sub,
+        action: 'COLLECTION_AUTOMATION_STAGE',
+        entityType: 'Invoice',
+        entityId: freshInvoice.id,
+        summary: `Ran collection stage ${stage.key} for ${freshInvoice.invoiceNo}`,
+        metadata: {
+          invoiceId: freshInvoice.id,
+          stage: stage.key,
+          paymentLinkReady: Boolean(freshInvoice.paymentUrl),
+        },
+      });
+    }
+
+    return {
+      invoicesScanned: invoices.length,
+      messagesSent,
+      actionsCreatedOrUpdated,
+      paymentLinksCreated,
+      items,
+    };
+  }
+
+  private async runReceiptRecovery(user: AuthUser, now: Date) {
+    const payments = await this.prisma.payment.findMany({
+      where: {
+        tenantId: user.tenantId,
+        status: PaymentStatus.SUCCEEDED,
+        paidAt: { gte: this.daysAgo(30) },
+      },
+      include: { invoice: { include: { customer: true } } },
+      orderBy: { paidAt: 'desc' },
+      take: 100,
+    });
+
+    const items: unknown[] = [];
+    for (const payment of payments) {
+      const receiptSent = await this.prisma.auditLog.findFirst({
+        where: {
+          tenantId: user.tenantId,
+          action: 'PAYMENT_RECEIPT_SENT',
+          entityType: 'Payment',
+          entityId: payment.id,
+        },
+        select: { id: true },
+      });
+      if (receiptSent) continue;
+
+      const sent = await this.payments.sendReceipt(user, payment.id, {
+        provider: MessageProvider.WHATSAPP,
+        note: 'Thank you. Your payment has been received.',
+      });
+      items.push({
+        paymentId: payment.id,
+        invoiceId: payment.invoiceId,
+        invoiceNo: payment.invoice.invoiceNo,
+        messageId: sent.message.id,
+      });
+    }
+
+    return {
+      scannedAt: now.toISOString(),
+      paymentsScanned: payments.length,
+      receiptsSent: items.length,
+      items,
+    };
+  }
+
+  private async runPromiseFollowUps(user: AuthUser, now: Date) {
+    const promiseAudits = await this.prisma.auditLog.findMany({
+      where: {
+        tenantId: user.tenantId,
+        action: 'COLLECTION_PROMISE_TO_PAY',
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+
+    const duePromises = promiseAudits.filter((audit) => {
+      const metadata = this.asRecord(audit.metadata);
+      const promiseDate = this.stringValue(metadata.promiseDate);
+      return promiseDate ? new Date(promiseDate) <= now : false;
+    });
+
+    const items: unknown[] = [];
+    for (const audit of duePromises) {
+      const metadata = this.asRecord(audit.metadata);
+      const invoiceId = this.stringValue(metadata.invoiceId) ?? audit.entityId;
+      const promiseDate = this.stringValue(metadata.promiseDate);
+      const note = this.stringValue(metadata.note);
+      if (!invoiceId) continue;
+
+      const invoice = await this.prisma.invoice.findFirst({
+        where: {
+          id: invoiceId,
+          tenantId: user.tenantId,
+          status: { in: [InvoiceStatus.SENT, InvoiceStatus.OVERDUE] },
+        },
+        include: this.includeInvoice(),
+      });
+      if (!invoice) continue;
+
+      const action = await this.upsertCollectionAction({
+        tenantId: user.tenantId,
+        invoice,
+        priority: ActionPriority.HIGH,
+        title: `Follow up promised payment ${invoice.invoiceNo}`,
+        description: `${invoice.customer.name} promised to pay ${this.money(invoice.totalCents)}. Follow up now and close the loop.`,
+        dueAt: now,
+        idempotencyKey: `collections:${invoice.id}:promise-follow-up`,
+        metadata: {
+          promiseDate,
+          note,
+          promiseAuditId: audit.id,
+        },
+      });
+
+      items.push({
+        invoiceId: invoice.id,
+        invoiceNo: invoice.invoiceNo,
+        actionId: action.id,
+      });
+    }
+
+    return {
+      promisesScanned: promiseAudits.length,
+      actionsCreatedOrUpdated: items.length,
+      items,
+    };
+  }
+
+  private collectionStage(invoice: CollectionInvoice, now: Date) {
+    const daysPastDue = this.daysPastDue(invoice.dueDate);
+    const dueSoon =
+      daysPastDue < 0 &&
+      invoice.dueDate.getTime() - now.getTime() <= 2 * 86_400_000;
+
+    if (dueSoon) {
+      return {
+        key: 'due-soon',
+        sendMessage: false,
+        createAction: false,
+        note: '',
+        priority: ActionPriority.LOW,
+        title: '',
+        description: '',
+      };
+    }
+    if (daysPastDue === 0) {
+      return {
+        key: 'due-today',
+        sendMessage: true,
+        createAction: invoice.totalCents >= 50000,
+        note: 'This invoice is due today.',
+        priority: ActionPriority.MEDIUM,
+        title: `Collect invoice due today ${invoice.invoiceNo}`,
+        description: `${invoice.customer.name} has an invoice due today for ${this.money(invoice.totalCents)}.`,
+      };
+    }
+    if (daysPastDue >= 3 && daysPastDue < 7) {
+      return {
+        key: 'overdue-3',
+        sendMessage: true,
+        createAction: true,
+        note: 'This invoice is now overdue. Please complete payment when you can.',
+        priority: ActionPriority.HIGH,
+        title: `Collect overdue invoice ${invoice.invoiceNo}`,
+        description: `${invoice.customer.name} is ${daysPastDue} days past due for ${this.money(invoice.totalCents)}.`,
+      };
+    }
+    if (daysPastDue >= 7 && daysPastDue < 14) {
+      return {
+        key: 'overdue-7',
+        sendMessage: true,
+        createAction: true,
+        note: 'This invoice is one week overdue. Please pay today or reply if you need help.',
+        priority: ActionPriority.URGENT,
+        title: `Escalate overdue invoice ${invoice.invoiceNo}`,
+        description: `${invoice.customer.name} is one week past due. Escalate collection and confirm payment intent.`,
+      };
+    }
+    if (daysPastDue >= 14) {
+      return {
+        key: 'overdue-14',
+        sendMessage: false,
+        createAction: true,
+        note: '',
+        priority: ActionPriority.URGENT,
+        title: `Final collection review ${invoice.invoiceNo}`,
+        description: `${invoice.customer.name} is ${daysPastDue} days past due. Decide whether to call, pause service, or write off.`,
+      };
+    }
+
+    return null;
+  }
+
+  private async hasAuditForStage(
+    tenantId: string,
+    invoiceId: string,
+    stage: string,
+  ) {
+    const existing = await this.prisma.auditLog.findFirst({
+      where: {
+        tenantId,
+        action: 'COLLECTION_AUTOMATION_STAGE',
+        entityId: invoiceId,
+        metadata: { path: ['stage'], equals: stage },
+      },
+      select: { id: true },
+    });
+    return Boolean(existing);
+  }
+
+  private upsertCollectionAction(input: {
+    tenantId: string;
+    invoice: CollectionInvoice;
+    priority: ActionPriority;
+    title: string;
+    description: string;
+    dueAt: Date;
+    idempotencyKey: string;
+    metadata: Prisma.InputJsonValue;
+  }) {
+    return this.prisma.operationalAction.upsert({
+      where: {
+        tenantId_idempotencyKey: {
+          tenantId: input.tenantId,
+          idempotencyKey: input.idempotencyKey,
+        },
+      },
+      update: {
+        priority: input.priority,
+        title: input.title,
+        description: input.description,
+        dueAt: input.dueAt,
+        status: ActionStatus.OPEN,
+        dismissedAt: null,
+        completedAt: null,
+        metadata: input.metadata,
+      },
+      create: {
+        tenantId: input.tenantId,
+        type: ActionType.COLLECT_PAYMENT,
+        priority: input.priority,
+        title: input.title,
+        description: input.description,
+        customerId: input.invoice.customerId,
+        bookingId: input.invoice.bookingId,
+        invoiceId: input.invoice.id,
+        dueAt: input.dueAt,
+        source: 'collections',
+        idempotencyKey: input.idempotencyKey,
+        metadata: input.metadata,
+      },
+    });
   }
 
   private async findInvoice(tenantId: string, invoiceId: string) {
@@ -427,6 +786,10 @@ export class CollectionsService {
     const date = new Date();
     date.setDate(date.getDate() - days);
     return date;
+  }
+
+  private stringValue(value: unknown) {
+    return typeof value === 'string' ? value : undefined;
   }
 
   private money(cents: number) {

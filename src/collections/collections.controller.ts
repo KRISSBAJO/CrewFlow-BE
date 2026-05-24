@@ -37,4 +37,9 @@ export class CollectionsController {
   scan(@CurrentUser() user: AuthUser) {
     return this.collections.scanOverdue(user);
   }
+
+  @Post('automation/run')
+  runAutomation(@CurrentUser() user: AuthUser) {
+    return this.collections.runAutomation(user);
+  }
 }
