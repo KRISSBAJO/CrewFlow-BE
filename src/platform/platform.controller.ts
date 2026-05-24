@@ -9,6 +9,7 @@ import { CreateBillingEventDto } from './dto/create-billing-event.dto';
 import { CreatePlatformCheckoutDto } from './dto/create-platform-checkout.dto';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateSupportNoteDto } from './dto/create-support-note.dto';
+import { UpdatePlatformUserDto } from './dto/update-platform-user.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
 import { PlatformService } from './platform.service';
 
@@ -27,6 +28,25 @@ export class PlatformController {
   @Get('tenants')
   tenants() {
     return this.platform.tenants();
+  }
+
+  @Get('users')
+  users() {
+    return this.platform.users();
+  }
+
+  @Patch('users/:id')
+  updateUser(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: UpdatePlatformUserDto,
+  ) {
+    return this.platform.updateUser(user, id, dto);
+  }
+
+  @Get('actions')
+  actions() {
+    return this.platform.actions();
   }
 
   @Get('tenants/:id')

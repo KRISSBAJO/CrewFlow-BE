@@ -19,6 +19,7 @@ import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateBillingEventDto } from './dto/create-billing-event.dto';
 import { CreatePlatformCheckoutDto } from './dto/create-platform-checkout.dto';
 import { CreateSupportNoteDto } from './dto/create-support-note.dto';
+import { UpdatePlatformUserDto } from './dto/update-platform-user.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
 
 type StripeCheckoutSession = {
@@ -120,6 +121,102 @@ export class PlatformService {
         },
       },
       orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+  }
+
+  users() {
+    return this.prisma.user.findMany({
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+        email: true,
+        role: true,
+        phone: true,
+        active: true,
+        createdAt: true,
+        updatedAt: true,
+        tenant: {
+          select: {
+            id: true,
+            businessName: true,
+            slug: true,
+            status: true,
+            subscriptionStatus: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 300,
+    });
+  }
+
+  async updateUser(user: AuthUser, id: string, dto: UpdatePlatformUserDto) {
+    const target = await this.prisma.user.findUniqueOrThrow({
+      where: { id },
+      include: { tenant: true },
+    });
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: {
+        name: dto.name?.trim(),
+        email: dto.email?.toLowerCase().trim(),
+        phone: dto.phone?.trim(),
+        role: dto.role,
+        active: dto.active,
+      },
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+        email: true,
+        role: true,
+        phone: true,
+        active: true,
+        createdAt: true,
+        updatedAt: true,
+        tenant: {
+          select: {
+            id: true,
+            businessName: true,
+            slug: true,
+            status: true,
+            subscriptionStatus: true,
+          },
+        },
+      },
+    });
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_USER_UPDATED',
+      entityType: 'User',
+      entityId: id,
+      summary: `Platform admin updated ${target.email}`,
+      metadata: {
+        targetTenantId: target.tenantId,
+        targetTenant: target.tenant.businessName,
+        role: dto.role,
+        active: dto.active,
+        email: dto.email,
+      },
+    });
+
+    return updated;
+  }
+
+  actions() {
+    return this.prisma.operationalAction.findMany({
+      include: {
+        tenant: true,
+        customer: true,
+        booking: { include: { service: true } },
+        invoice: true,
+        assignedTo: { select: { id: true, name: true, email: true, role: true } },
+      },
+      orderBy: [{ priority: 'desc' }, { dueAt: 'asc' }, { createdAt: 'desc' }],
       take: 200,
     });
   }
