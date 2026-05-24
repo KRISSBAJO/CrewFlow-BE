@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
+import { AssignJobDto } from './dto/assign-job.dto';
 import { CompleteJobDto } from './dto/complete-job.dto';
 import { JobNoteDto } from './dto/job-note.dto';
 import { FieldOpsService } from './field-ops.service';
@@ -14,6 +15,11 @@ export class FieldOpsController {
     return this.fieldOps.jobs(user, date);
   }
 
+  @Get('dispatch')
+  dispatch(@CurrentUser() user: AuthUser, @Query('date') date?: string) {
+    return this.fieldOps.dispatchBoard(user, date);
+  }
+
   @Get('jobs/:bookingId')
   job(@CurrentUser() user: AuthUser, @Param('bookingId') bookingId: string) {
     return this.fieldOps.job(user, bookingId);
@@ -25,6 +31,15 @@ export class FieldOpsController {
     @Param('bookingId') bookingId: string,
   ) {
     return this.fieldOps.startJob(user, bookingId);
+  }
+
+  @Post('jobs/:bookingId/assign')
+  assignJob(
+    @CurrentUser() user: AuthUser,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: AssignJobDto,
+  ) {
+    return this.fieldOps.assignJob(user, bookingId, dto);
   }
 
   @Post('jobs/:bookingId/notes')
