@@ -26,6 +26,7 @@ import { RetentionModule } from './retention/retention.module';
 import { ServicesModule } from './services/services.module';
 import { RateLimitGuard } from './security/rate-limit.guard';
 import { SchedulerModule } from './scheduler/scheduler.module';
+import { SchedulingModule } from './scheduling/scheduling.module';
 import { SecurityModule } from './security/security.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
@@ -60,6 +61,7 @@ import { WorkflowsModule } from './workflows/workflows.module';
     WebhooksModule,
     WorkflowsModule,
     SchedulerModule,
+    SchedulingModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: RateLimitGuard },
