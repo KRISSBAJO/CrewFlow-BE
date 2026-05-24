@@ -163,7 +163,7 @@ It returns database status, sanitized integration readiness, scheduler status, p
 
 - Auth and tenant isolation
 - Tenant settings and onboarding
-- Customers and customer timeline
+- Customers, customer timeline, CSV/Excel import, and WhatsApp export import
 - Services and staff management
 - Booking creation, recurrence, inline customers, conflict checks
 - Field job completion and invoice generation
@@ -178,6 +178,8 @@ It returns database status, sanitized integration readiness, scheduler status, p
 - `GET /api/health`
 - `GET /api/dashboard`
 - `GET /api/customers`
+- `POST /api/customers/import`
+- `POST /api/customers/import/whatsapp`
 - `GET /api/customers/:id/timeline`
 - `GET|POST /api/bookings`
 - `PATCH /api/bookings/:id`

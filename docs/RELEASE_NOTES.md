@@ -8,6 +8,7 @@ This checkpoint covers the CrewFlow backend through the operational money-engine
 
 - Tenant-aware auth and onboarding
 - Staff, customer, service, and booking management
+- CSV/Excel-ready customer import and WhatsApp export import
 - Inline customer booking creation
 - Recurring booking support
 - Staff conflict checks
