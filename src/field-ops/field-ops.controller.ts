@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
+import { Roles } from '../common/roles.decorator';
 import { AssignJobDto } from './dto/assign-job.dto';
 import { CompleteJobDto } from './dto/complete-job.dto';
 import { JobNoteDto } from './dto/job-note.dto';
@@ -15,6 +17,7 @@ export class FieldOpsController {
     return this.fieldOps.jobs(user, date);
   }
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Get('dispatch')
   dispatch(@CurrentUser() user: AuthUser, @Query('date') date?: string) {
     return this.fieldOps.dispatchBoard(user, date);
@@ -33,6 +36,7 @@ export class FieldOpsController {
     return this.fieldOps.startJob(user, bookingId);
   }
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Post('jobs/:bookingId/assign')
   assignJob(
     @CurrentUser() user: AuthUser,

@@ -23,6 +23,7 @@ export class MessagesController {
     return this.messages.send(user, dto);
   }
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Get()
   findAll(
     @CurrentUser() user: AuthUser,

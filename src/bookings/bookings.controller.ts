@@ -7,8 +7,10 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
+import { Roles } from '../common/roles.decorator';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
@@ -17,11 +19,13 @@ import { UpdateBookingDto } from './dto/update-booking.dto';
 export class BookingsController {
   constructor(private readonly bookings: BookingsService) {}
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateBookingDto) {
     return this.bookings.create(user, dto);
   }
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Get()
   findAll(
     @CurrentUser() user: AuthUser,
@@ -41,6 +45,7 @@ export class BookingsController {
     return this.bookings.mySchedule(user, from, to);
   }
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Get('staff/:staffId/schedule')
   staffSchedule(
     @CurrentUser() user: AuthUser,
@@ -51,6 +56,7 @@ export class BookingsController {
     return this.bookings.staffSchedule(user, staffId, from, to);
   }
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Patch(':id')
   update(
     @CurrentUser() user: AuthUser,
@@ -65,6 +71,7 @@ export class BookingsController {
     return this.bookings.markOnTheWay(user, id);
   }
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Post(':id/no-show')
   markNoShow(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.bookings.markNoShow(user, id);

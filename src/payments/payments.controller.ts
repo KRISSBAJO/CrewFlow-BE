@@ -24,6 +24,7 @@ import { PaymentsService } from './payments.service';
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Get('payments')
   findAll(
     @CurrentUser() user: AuthUser,
@@ -42,6 +43,7 @@ export class PaymentsController {
     return this.payments.createInvoicePaymentLink(user, id, dto);
   }
 
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Get('invoices/:id/html')
   @Header('Content-Type', 'text/html; charset=utf-8')
   renderInvoiceHtml(@CurrentUser() user: AuthUser, @Param('id') id: string) {
