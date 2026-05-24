@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import {
   ActionStatus,
   AutomationRunStatus,
@@ -17,12 +22,14 @@ import { randomBytes } from 'crypto';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../common/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
+import { ArchiveTenantDto } from './dto/archive-tenant.dto';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateBillingEventDto } from './dto/create-billing-event.dto';
 import { CreatePlatformCheckoutDto } from './dto/create-platform-checkout.dto';
 import { CreatePlatformTenantDto } from './dto/create-platform-tenant.dto';
 import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 import { CreateSupportNoteDto } from './dto/create-support-note.dto';
+import { ReplayPlatformFailureDto } from './dto/replay-platform-failure.dto';
 import { UpdatePlatformUserDto } from './dto/update-platform-user.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
 import { UpdateActionDto } from '../workflows/dto/update-action.dto';
@@ -44,6 +51,7 @@ export class PlatformService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly jwt: JwtService,
   ) {}
 
   async metrics() {
@@ -131,6 +139,7 @@ export class PlatformService {
   }
 
   async createTenant(user: AuthUser, dto: CreatePlatformTenantDto) {
+    this.assertSuperAdmin(user, 'create tenants');
     const slug = await this.uniqueTenantSlug(dto.slug ?? dto.businessName);
     const passwordHash = await bcrypt.hash(dto.ownerPassword, 12);
     const tenant = await this.prisma.$transaction(async (tx) => {
@@ -223,6 +232,7 @@ export class PlatformService {
   }
 
   async createUser(user: AuthUser, dto: CreatePlatformUserDto) {
+    this.assertSuperAdmin(user, 'create users');
     await this.prisma.tenant.findUniqueOrThrow({ where: { id: dto.tenantId } });
     const passwordHash = await bcrypt.hash(dto.password, 12);
     const created = await this.prisma.user.create({
@@ -270,6 +280,7 @@ export class PlatformService {
   }
 
   async updateUser(user: AuthUser, id: string, dto: UpdatePlatformUserDto) {
+    this.assertSuperAdmin(user, 'update users');
     const target = await this.prisma.user.findUniqueOrThrow({
       where: { id },
       include: { tenant: true },
@@ -426,6 +437,20 @@ export class PlatformService {
   }
 
   async updateTenant(user: AuthUser, id: string, dto: UpdateTenantStatusDto) {
+    if (
+      user.role !== UserRole.PLATFORM_ADMIN &&
+      (dto.status ||
+        dto.subscriptionStatus ||
+        dto.subscriptionPlan ||
+        dto.monthlyPriceCents !== undefined ||
+        dto.setupFeeCents !== undefined ||
+        dto.stripeCustomerId ||
+        dto.stripeSubscriptionId)
+    ) {
+      throw new ForbiddenException(
+        'Platform support can update flags and limits only',
+      );
+    }
     const tenant = await this.prisma.tenant.update({
       where: { id },
       data: {
@@ -490,6 +515,58 @@ export class PlatformService {
     return tenant;
   }
 
+  async archiveTenant(user: AuthUser, id: string, dto: ArchiveTenantDto) {
+    this.assertSuperAdmin(user, 'archive tenants');
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id },
+    });
+    if (dto.confirmation !== tenant.businessName) {
+      throw new BadRequestException(
+        'Confirmation must exactly match the tenant business name',
+      );
+    }
+
+    const archived = await this.prisma.tenant.update({
+      where: { id },
+      data: {
+        status: TenantStatus.ARCHIVED,
+        suspendedAt: new Date(),
+      },
+    });
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_TENANT_ARCHIVED',
+      entityType: 'Tenant',
+      entityId: id,
+      summary: `Platform admin archived ${tenant.businessName}`,
+      metadata: { reason: dto.reason, confirmation: dto.confirmation },
+    });
+
+    return archived;
+  }
+
+  async restoreTenant(user: AuthUser, id: string) {
+    this.assertSuperAdmin(user, 'restore tenants');
+    const tenant = await this.prisma.tenant.update({
+      where: { id },
+      data: { status: TenantStatus.ACTIVE, suspendedAt: null },
+    });
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_TENANT_RESTORED',
+      entityType: 'Tenant',
+      entityId: id,
+      summary: `Platform admin restored ${tenant.businessName}`,
+      metadata: { restoredStatus: tenant.status },
+    });
+
+    return tenant;
+  }
+
   async tenantHealth(id: string) {
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 86_400_000);
@@ -542,6 +619,7 @@ export class PlatformService {
 
     let score = 100;
     if (tenant.status === TenantStatus.SUSPENDED) score -= 40;
+    if (tenant.status === TenantStatus.ARCHIVED) score -= 60;
     if (tenant.status === TenantStatus.CHURNED) score -= 70;
     score -= Math.min(25, failedAutomations * 5 + failedWebhooks * 5);
     score -= Math.min(20, overdueInvoices * 4);
@@ -583,6 +661,223 @@ export class PlatformService {
         },
       },
     });
+  }
+
+  async search(q?: string) {
+    const needle = q?.trim();
+    if (!needle || needle.length < 2) {
+      throw new BadRequestException('Search requires at least 2 characters');
+    }
+    const contains = { contains: needle, mode: Prisma.QueryMode.insensitive };
+    const [tenants, users, customers, bookings, leads, invoices] =
+      await Promise.all([
+        this.prisma.tenant.findMany({
+          where: {
+            OR: [
+              { businessName: contains },
+              { slug: contains },
+              { industry: contains },
+              { billingEmail: contains },
+            ],
+          },
+          take: 10,
+          orderBy: { updatedAt: 'desc' },
+        }),
+        this.prisma.user.findMany({
+          where: { OR: [{ name: contains }, { email: contains }] },
+          select: {
+            id: true,
+            tenantId: true,
+            name: true,
+            email: true,
+            role: true,
+            active: true,
+            tenant: { select: { id: true, businessName: true, slug: true } },
+          },
+          take: 10,
+        }),
+        this.prisma.customer.findMany({
+          where: {
+            OR: [{ name: contains }, { phone: contains }, { email: contains }],
+          },
+          include: { tenant: true },
+          take: 10,
+          orderBy: { updatedAt: 'desc' },
+        }),
+        this.prisma.booking.findMany({
+          where: {
+            OR: [
+              { notes: contains },
+              { customer: { name: contains } },
+              { service: { title: contains } },
+            ],
+          },
+          include: { tenant: true, customer: true, service: true },
+          take: 10,
+          orderBy: { updatedAt: 'desc' },
+        }),
+        this.prisma.lead.findMany({
+          where: {
+            OR: [
+              { title: contains },
+              { notes: contains },
+              { wonLostReason: contains },
+              { customer: { name: contains } },
+            ],
+          },
+          include: { tenant: true, customer: true },
+          take: 10,
+          orderBy: { updatedAt: 'desc' },
+        }),
+        this.prisma.invoice.findMany({
+          where: {
+            OR: [{ invoiceNo: contains }, { customer: { name: contains } }],
+          },
+          include: { tenant: true, customer: true },
+          take: 10,
+          orderBy: { updatedAt: 'desc' },
+        }),
+      ]);
+
+    return {
+      query: needle,
+      tenants,
+      users,
+      customers,
+      bookings,
+      leads,
+      invoices,
+    };
+  }
+
+  async tenantTimeline(id: string) {
+    const [audit, billing, support, automationFailures, webhookFailures] =
+      await Promise.all([
+        this.prisma.auditLog.findMany({
+          where: { OR: [{ tenantId: id }, { entityId: id }] },
+          include: { actor: { select: { id: true, email: true, role: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: 80,
+        }),
+        this.prisma.platformBillingEvent.findMany({
+          where: { tenantId: id },
+          include: { actor: { select: { id: true, email: true, role: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+        }),
+        this.prisma.platformSupportNote.findMany({
+          where: { tenantId: id },
+          include: {
+            author: { select: { id: true, email: true, role: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+        }),
+        this.prisma.automationRun.findMany({
+          where: { tenantId: id, status: AutomationRunStatus.FAILED },
+          orderBy: { updatedAt: 'desc' },
+          take: 25,
+        }),
+        this.prisma.webhookEvent.findMany({
+          where: { tenantId: id, status: WebhookEventStatus.FAILED },
+          orderBy: { createdAt: 'desc' },
+          take: 25,
+        }),
+      ]);
+
+    return [
+      ...audit.map((item) => ({
+        id: item.id,
+        kind: 'audit',
+        title: item.action,
+        summary: item.summary,
+        createdAt: item.createdAt,
+        actor: item.actor,
+      })),
+      ...billing.map((item) => ({
+        id: item.id,
+        kind: 'billing',
+        title: item.type,
+        summary: item.note ?? item.provider,
+        amountCents: item.amountCents,
+        createdAt: item.createdAt,
+        actor: item.actor,
+      })),
+      ...support.map((item) => ({
+        id: item.id,
+        kind: 'support',
+        title: 'Support note',
+        summary: item.note,
+        createdAt: item.createdAt,
+        actor: item.author,
+      })),
+      ...automationFailures.map((item) => ({
+        id: item.id,
+        kind: 'automation_failure',
+        title: item.trigger,
+        summary: item.error,
+        createdAt: item.updatedAt,
+      })),
+      ...webhookFailures.map((item) => ({
+        id: item.id,
+        kind: 'webhook_failure',
+        title: `${item.provider} webhook`,
+        summary: item.error,
+        createdAt: item.createdAt,
+      })),
+    ].sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+  }
+
+  async exportTenant(user: AuthUser, id: string) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id },
+      include: {
+        users: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            active: true,
+            createdAt: true,
+          },
+        },
+        customers: true,
+        services: true,
+        bookings: true,
+        invoices: true,
+        payments: true,
+        leads: true,
+        conversations: true,
+        messages: true,
+        automationRuns: true,
+        webhookEvents: true,
+        operationalActions: true,
+        supportNotes: true,
+        billingEvents: true,
+        auditLogs: true,
+      },
+    });
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_TENANT_EXPORTED',
+      entityType: 'Tenant',
+      entityId: id,
+      summary: `Platform admin exported ${tenant.businessName}`,
+      metadata: {
+        users: tenant.users.length,
+        customers: tenant.customers.length,
+        bookings: tenant.bookings.length,
+        invoices: tenant.invoices.length,
+      },
+    });
+
+    return { exportedAt: new Date().toISOString(), tenant };
   }
 
   supportNotes(id: string) {
@@ -638,6 +933,7 @@ export class PlatformService {
     id: string,
     dto: CreateBillingEventDto,
   ) {
+    this.assertSuperAdmin(user, 'manage billing events');
     const event = await this.prisma.platformBillingEvent.create({
       data: {
         tenantId: id,
@@ -716,6 +1012,7 @@ export class PlatformService {
     id: string,
     dto: CreatePlatformCheckoutDto,
   ) {
+    this.assertSuperAdmin(user, 'create billing checkout sessions');
     const tenant = await this.prisma.tenant.findUniqueOrThrow({
       where: { id },
     });
@@ -787,6 +1084,7 @@ export class PlatformService {
   }
 
   async createBillingPortal(user: AuthUser, id: string) {
+    this.assertSuperAdmin(user, 'open billing portals');
     const tenant = await this.prisma.tenant.findUniqueOrThrow({
       where: { id },
     });
@@ -926,6 +1224,79 @@ export class PlatformService {
     return access;
   }
 
+  async impersonate(user: AuthUser, token: string) {
+    const access = await this.prisma.platformSupportAccess.findUniqueOrThrow({
+      where: { token },
+      include: { tenant: true, admin: true },
+    });
+    if (access.adminId !== user.sub) {
+      throw new ForbiddenException('Support token belongs to another admin');
+    }
+    if (access.expiresAt < new Date()) {
+      throw new BadRequestException('Support token has expired');
+    }
+
+    const target = await this.prisma.user.findFirst({
+      where: {
+        tenantId: access.tenantId,
+        active: true,
+        role: { in: [UserRole.OWNER, UserRole.MANAGER] },
+      },
+      orderBy: [{ role: 'asc' }, { createdAt: 'asc' }],
+    });
+    if (!target) {
+      throw new BadRequestException('Tenant has no active owner or manager');
+    }
+
+    await this.prisma.platformSupportAccess.update({
+      where: { id: access.id },
+      data: { usedAt: new Date() },
+    });
+
+    await this.auditService.record({
+      tenantId: access.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_SUPPORT_IMPERSONATION_STARTED',
+      entityType: 'User',
+      entityId: target.id,
+      summary: `Platform support opened audited access as ${target.email}`,
+      metadata: {
+        supportAccessId: access.id,
+        platformAdminId: user.sub,
+        platformAdminEmail: user.email,
+        reason: access.reason,
+      },
+    });
+
+    const accessToken = this.jwt.sign({
+      sub: target.id,
+      tenantId: target.tenantId,
+      email: target.email,
+      role: target.role,
+      impersonatedBy: user.sub,
+      supportAccessId: access.id,
+    });
+
+    return {
+      accessToken,
+      user: {
+        id: target.id,
+        sub: target.id,
+        tenantId: target.tenantId,
+        email: target.email,
+        role: target.role,
+        impersonatedBy: user.sub,
+      },
+      tenant: {
+        id: access.tenant.id,
+        businessName: access.tenant.businessName,
+        slug: access.tenant.slug,
+        industry: access.tenant.industry,
+        status: access.tenant.status,
+      },
+    };
+  }
+
   automationFailures() {
     return this.prisma.automationRun.findMany({
       where: { status: AutomationRunStatus.FAILED },
@@ -942,6 +1313,80 @@ export class PlatformService {
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
+  }
+
+  async retryAutomationFailure(
+    user: AuthUser,
+    id: string,
+    dto: ReplayPlatformFailureDto,
+  ) {
+    const run = await this.prisma.automationRun.findUniqueOrThrow({
+      where: { id },
+    });
+    const updated = await this.prisma.automationRun.update({
+      where: { id },
+      data: {
+        status: AutomationRunStatus.PENDING,
+        error: null,
+        scheduledFor: new Date(),
+        metadata: {
+          ...(run.metadata as Record<string, unknown> | null),
+          platformRetryReason: dto.reason,
+          platformRetriedBy: user.sub,
+          platformRetriedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    await this.auditService.record({
+      tenantId: run.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_AUTOMATION_RETRY_QUEUED',
+      entityType: 'AutomationRun',
+      entityId: id,
+      summary: `Platform admin queued ${run.trigger} automation retry`,
+      metadata: { reason: dto.reason },
+    });
+
+    return updated;
+  }
+
+  async replayWebhookFailure(
+    user: AuthUser,
+    id: string,
+    dto: ReplayPlatformFailureDto,
+  ) {
+    const event = await this.prisma.webhookEvent.findUniqueOrThrow({
+      where: { id },
+    });
+    const updated = await this.prisma.webhookEvent.update({
+      where: { id },
+      data: {
+        status: WebhookEventStatus.RECEIVED,
+        error: null,
+        processedAt: null,
+        payload: {
+          ...(event.payload as Record<string, unknown> | null),
+          platformReplay: {
+            reason: dto.reason,
+            replayedBy: user.sub,
+            replayedAt: new Date().toISOString(),
+          },
+        },
+      },
+    });
+
+    await this.auditService.record({
+      tenantId: event.tenantId ?? user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_WEBHOOK_REPLAY_QUEUED',
+      entityType: 'WebhookEvent',
+      entityId: id,
+      summary: `Platform admin queued ${event.provider} webhook replay`,
+      metadata: { reason: dto.reason },
+    });
+
+    return updated;
   }
 
   auditLogs() {
@@ -1134,6 +1579,22 @@ export class PlatformService {
           canceledAt: now,
         },
       });
+    }
+
+    if (
+      dto.type === BillingEventType.CREDIT_APPLIED ||
+      dto.type === BillingEventType.REFUND_ISSUED
+    ) {
+      await this.prisma.tenant.update({
+        where: { id: tenantId },
+        data: { pastDueAt: null },
+      });
+    }
+  }
+
+  private assertSuperAdmin(user: AuthUser, action: string) {
+    if (user.role !== UserRole.PLATFORM_ADMIN) {
+      throw new ForbiddenException(`Only platform admins can ${action}`);
     }
   }
 }

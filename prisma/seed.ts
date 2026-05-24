@@ -65,6 +65,26 @@ async function main() {
     },
   });
 
+  await prisma.user.upsert({
+    where: {
+      tenantId_email: {
+        tenantId: platformTenant.id,
+        email: 'support@crewflow.test',
+      },
+    },
+    update: {
+      role: UserRole.PLATFORM_SUPPORT,
+      active: true,
+    },
+    create: {
+      tenantId: platformTenant.id,
+      name: 'CrewFlow Support',
+      email: 'support@crewflow.test',
+      passwordHash,
+      role: UserRole.PLATFORM_SUPPORT,
+    },
+  });
+
   const tenant = await prisma.tenant.upsert({
     where: { slug: 'sparkle-home-services' },
     update: {

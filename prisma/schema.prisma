@@ -9,6 +9,7 @@ datasource db {
 
 enum UserRole {
   PLATFORM_ADMIN
+  PLATFORM_SUPPORT
   OWNER
   MANAGER
   STAFF
@@ -18,6 +19,7 @@ enum TenantStatus {
   TRIAL
   ACTIVE
   SUSPENDED
+  ARCHIVED
   CHURNED
 }
 
@@ -38,6 +40,7 @@ enum BillingEventType {
   PAST_DUE
   CANCELED
   CREDIT_APPLIED
+  REFUND_ISSUED
 }
 
 enum BookingStatus {
