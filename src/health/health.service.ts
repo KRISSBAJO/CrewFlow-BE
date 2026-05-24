@@ -45,6 +45,7 @@ export class HealthService {
     const whatsappPartial = whatsappFields.some(Boolean) && !whatsappConfigured;
     const stripeConfigured = Boolean(process.env.STRIPE_SECRET_KEY);
     const stripeWebhookReady = Boolean(process.env.STRIPE_WEBHOOK_SECRET);
+    const paystackConfigured = Boolean(process.env.PAYSTACK_SECRET_KEY);
     const publicApiUrl = this.urlStatus(process.env.PUBLIC_API_URL, production);
 
     if (production && corsOrigins.length === 0) {
@@ -98,6 +99,16 @@ export class HealthService {
           stripe: {
             configured: stripeConfigured,
             webhookSecretConfigured: stripeWebhookReady,
+          },
+          paystack: {
+            configured: paystackConfigured,
+            currency: process.env.PAYSTACK_CURRENCY ?? 'NGN',
+            platformPlanConfigured: Boolean(
+              process.env.PAYSTACK_PLATFORM_PLAN_CODE,
+            ),
+            tenantPlanConfigured: Boolean(
+              process.env.PAYSTACK_TENANT_PLAN_CODE,
+            ),
           },
           whatsapp: {
             configured: whatsappConfigured,

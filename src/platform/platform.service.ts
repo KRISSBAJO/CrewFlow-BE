@@ -46,6 +46,16 @@ type StripePortalSession = {
   url?: string;
 };
 
+type PaystackInitializeResponse = {
+  status: boolean;
+  message: string;
+  data?: {
+    authorization_url?: string;
+    access_code?: string;
+    reference?: string;
+  };
+};
+
 type PlatformAuditFilters = {
   tenantId?: string;
   action?: string;
@@ -599,7 +609,9 @@ export class PlatformService {
         dto.monthlyPriceCents !== undefined ||
         dto.setupFeeCents !== undefined ||
         dto.stripeCustomerId ||
-        dto.stripeSubscriptionId)
+        dto.stripeSubscriptionId ||
+        dto.paystackCustomerCode ||
+        dto.paystackSubscriptionCode)
     ) {
       throw new ForbiddenException(
         'Platform support can update flags and limits only',
@@ -623,6 +635,8 @@ export class PlatformService {
           : undefined,
         stripeCustomerId: dto.stripeCustomerId,
         stripeSubscriptionId: dto.stripeSubscriptionId,
+        paystackCustomerCode: dto.paystackCustomerCode,
+        paystackSubscriptionCode: dto.paystackSubscriptionCode,
         pastDueAt:
           dto.subscriptionStatus === SubscriptionStatus.PAST_DUE ||
           dto.subscriptionStatus === SubscriptionStatus.UNPAID
@@ -661,6 +675,8 @@ export class PlatformService {
         nextBillingAt: dto.nextBillingAt,
         stripeCustomerId: dto.stripeCustomerId,
         stripeSubscriptionId: dto.stripeSubscriptionId,
+        paystackCustomerCode: dto.paystackCustomerCode,
+        paystackSubscriptionCode: dto.paystackSubscriptionCode,
         featureFlags: dto.featureFlags,
         planLimits: dto.planLimits,
       },
@@ -1149,7 +1165,10 @@ export class PlatformService {
       billingEmail: tenant.billingEmail,
       stripeCustomerId: tenant.stripeCustomerId,
       stripeSubscriptionId: tenant.stripeSubscriptionId,
+      paystackCustomerCode: tenant.paystackCustomerCode,
+      paystackSubscriptionCode: tenant.paystackSubscriptionCode,
       stripeConfigured: Boolean(process.env.STRIPE_SECRET_KEY),
+      paystackConfigured: Boolean(process.env.PAYSTACK_SECRET_KEY),
       trialEndsAt: tenant.trialEndsAt,
       currentPeriodEnd: tenant.currentPeriodEnd,
       nextBillingAt: tenant.nextBillingAt,
@@ -1179,15 +1198,27 @@ export class PlatformService {
       throw new BadRequestException('Monthly price must be greater than zero');
     }
 
-    const checkout = process.env.STRIPE_SECRET_KEY
-      ? await this.createStripeSubscriptionCheckout({
-          tenant,
-          monthlyPriceCents,
-          setupFeeCents: collectSetupFee ? setupFeeCents : 0,
-          successUrl: dto.successUrl,
-          cancelUrl: dto.cancelUrl,
-        })
-      : this.createMockSubscriptionCheckout(id);
+    const provider = this.billingProvider(dto.provider);
+    const checkout =
+      provider === 'stripe'
+        ? await this.createStripeSubscriptionCheckout({
+            tenant,
+            monthlyPriceCents,
+            setupFeeCents: collectSetupFee ? setupFeeCents : 0,
+            successUrl: dto.successUrl,
+            cancelUrl: dto.cancelUrl,
+            currency: dto.currency,
+          })
+        : provider === 'paystack'
+          ? await this.createPaystackSubscriptionCheckout({
+              tenant,
+              monthlyPriceCents,
+              setupFeeCents: collectSetupFee ? setupFeeCents : 0,
+              successUrl: dto.successUrl,
+              currency: dto.currency,
+              paystackPlanCode: dto.paystackPlanCode,
+            })
+          : this.createMockSubscriptionCheckout(id);
 
     await this.prisma.tenant.update({
       where: { id },
@@ -1197,6 +1228,10 @@ export class PlatformService {
         stripeCustomerId: checkout.customerId ?? tenant.stripeCustomerId,
         stripeSubscriptionId:
           checkout.subscriptionId ?? tenant.stripeSubscriptionId,
+        paystackCustomerCode:
+          checkout.paystackCustomerCode ?? tenant.paystackCustomerCode,
+        paystackSubscriptionCode:
+          checkout.paystackSubscriptionCode ?? tenant.paystackSubscriptionCode,
       },
     });
 
@@ -1210,11 +1245,13 @@ export class PlatformService {
         providerEventId: checkout.sessionId,
         note: checkout.mock
           ? 'Mock platform subscription checkout created.'
-          : 'Stripe platform subscription checkout created.',
+          : `${checkout.provider} platform subscription checkout created.`,
         metadata: {
           checkoutUrl: checkout.url,
           monthlyPriceCents,
           setupFeeCents: collectSetupFee ? setupFeeCents : 0,
+          currency: checkout.currency,
+          paystackPlanCode: dto.paystackPlanCode,
         },
       },
     });
@@ -1650,6 +1687,7 @@ export class PlatformService {
     setupFeeCents: number;
     successUrl?: string;
     cancelUrl?: string;
+    currency?: string;
   }) {
     const secret = process.env.STRIPE_SECRET_KEY;
     if (!secret) {
@@ -1696,7 +1734,7 @@ export class PlatformService {
       input.setupFeeCents.toString(),
     );
     params.set('line_items[0][quantity]', '1');
-    params.set('line_items[0][price_data][currency]', 'usd');
+    params.set('line_items[0][price_data][currency]', input.currency ?? 'usd');
     params.set(
       'line_items[0][price_data][unit_amount]',
       input.monthlyPriceCents.toString(),
@@ -1709,7 +1747,10 @@ export class PlatformService {
 
     if (input.setupFeeCents > 0) {
       params.set('line_items[1][quantity]', '1');
-      params.set('line_items[1][price_data][currency]', 'usd');
+      params.set(
+        'line_items[1][price_data][currency]',
+        input.currency ?? 'usd',
+      );
       params.set(
         'line_items[1][price_data][unit_amount]',
         input.setupFeeCents.toString(),
@@ -1744,6 +1785,89 @@ export class PlatformService {
       sessionId: session.id,
       customerId: session.customer,
       subscriptionId: session.subscription,
+      paystackCustomerCode: undefined,
+      paystackSubscriptionCode: undefined,
+      currency: input.currency ?? 'usd',
+    };
+  }
+
+  private async createPaystackSubscriptionCheckout(input: {
+    tenant: Tenant;
+    monthlyPriceCents: number;
+    setupFeeCents: number;
+    successUrl?: string;
+    currency?: string;
+    paystackPlanCode?: string;
+  }) {
+    const secret = process.env.PAYSTACK_SECRET_KEY;
+    if (!secret) {
+      throw new BadRequestException('PAYSTACK_SECRET_KEY is not configured');
+    }
+    const email = input.tenant.billingEmail;
+    if (!email) {
+      throw new BadRequestException(
+        'Tenant billing email is required for Paystack',
+      );
+    }
+    const currency = (
+      input.currency ??
+      process.env.PAYSTACK_CURRENCY ??
+      'NGN'
+    ).toUpperCase();
+    const amount = input.monthlyPriceCents + input.setupFeeCents;
+    const apiBase = process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api';
+    const callbackUrl =
+      input.successUrl ??
+      process.env.PLATFORM_BILLING_SUCCESS_URL ??
+      `${apiBase.replace('/api', '')}/admin?billing=success`;
+    const reference = `cf_platform_${input.tenant.id}_${Date.now()}`;
+    const plan =
+      input.paystackPlanCode ?? process.env.PAYSTACK_PLATFORM_PLAN_CODE;
+    const body: Record<string, unknown> = {
+      email,
+      amount,
+      currency,
+      reference,
+      callback_url: callbackUrl,
+      metadata: {
+        kind: 'platform_subscription',
+        tenantId: input.tenant.id,
+        monthlyPriceCents: input.monthlyPriceCents,
+        setupFeeCents: input.setupFeeCents,
+      },
+    };
+    if (plan) {
+      body.plan = plan;
+    }
+
+    const response = await fetch(
+      'https://api.paystack.co/transaction/initialize',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const payload = (await response.json()) as PaystackInitializeResponse;
+    if (!response.ok || !payload.status || !payload.data?.authorization_url) {
+      throw new BadRequestException(
+        payload.message || 'Paystack checkout failed',
+      );
+    }
+
+    return {
+      provider: 'paystack',
+      mock: false,
+      url: payload.data.authorization_url,
+      sessionId: payload.data.reference ?? reference,
+      customerId: undefined,
+      subscriptionId: undefined,
+      paystackCustomerCode: undefined,
+      paystackSubscriptionCode: undefined,
+      currency,
     };
   }
 
@@ -1756,7 +1880,17 @@ export class PlatformService {
       sessionId: `mock_platform_${tenantId}_${Date.now()}`,
       customerId: `mock_cus_${tenantId}`,
       subscriptionId: `mock_sub_${tenantId}`,
+      paystackCustomerCode: undefined,
+      paystackSubscriptionCode: undefined,
+      currency: 'usd',
     };
+  }
+
+  private billingProvider(provider?: 'stripe' | 'paystack' | 'mock') {
+    if (provider) return provider;
+    if (process.env.PAYSTACK_SECRET_KEY) return 'paystack';
+    if (process.env.STRIPE_SECRET_KEY) return 'stripe';
+    return 'mock';
   }
 
   private async applyBillingEventToTenant(

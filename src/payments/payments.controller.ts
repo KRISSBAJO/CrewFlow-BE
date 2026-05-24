@@ -94,4 +94,18 @@ export class PaymentsController {
       request?.rawBody?.toString('utf8'),
     );
   }
+
+  @Public()
+  @Post('webhooks/paystack')
+  handlePaystackWebhook(
+    @Body() payload: unknown,
+    @Headers('x-paystack-signature') signature?: string,
+    @Req() request?: RawBodyRequest<Request>,
+  ) {
+    return this.payments.handlePaystackWebhook(
+      payload,
+      signature,
+      request?.rawBody?.toString('utf8'),
+    );
+  }
 }

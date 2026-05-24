@@ -18,6 +18,7 @@ import {
   WebhookEventStatus,
   WebhookProvider,
 } from '@prisma/client';
+import { createHmac } from 'crypto';
 import { AuditService } from '../audit/audit.service';
 import { AutomationsService } from '../automations/automations.service';
 import { AuthUser } from '../common/current-user.decorator';
@@ -32,6 +33,15 @@ type StripeCheckoutSession = {
   id: string;
   url?: string;
   payment_intent?: string;
+};
+
+type PaystackInitializeResponse = {
+  status: boolean;
+  message: string;
+  data?: {
+    authorization_url?: string;
+    reference?: string;
+  };
 };
 
 @Injectable()
@@ -94,7 +104,9 @@ export class PaymentsService {
     const checkout =
       provider === PaymentProvider.STRIPE
         ? await this.createStripeCheckoutSession(invoice, payment.id)
-        : this.createMockCheckout(invoice.id, payment.id);
+        : provider === PaymentProvider.PAYSTACK
+          ? await this.createPaystackCheckoutSession(invoice, payment.id)
+          : this.createMockCheckout(invoice.id, payment.id);
 
     const updatedPayment = await this.prisma.payment.update({
       where: { id: payment.id },
@@ -422,6 +434,106 @@ export class PaymentsService {
     }
   }
 
+  async handlePaystackWebhook(
+    payload: unknown,
+    signature?: string,
+    rawBody?: string,
+  ) {
+    const secret = this.config.get<string>('PAYSTACK_SECRET_KEY');
+    if (secret) {
+      const expected = createHmac('sha512', secret)
+        .update(rawBody ?? JSON.stringify(payload))
+        .digest('hex');
+      if (!signature || signature !== expected) {
+        throw new UnauthorizedException('Invalid Paystack webhook signature');
+      }
+    }
+
+    const body = this.asRecord(payload);
+    const data = this.asRecord(body.data);
+    const metadata = this.asRecord(data.metadata);
+    const eventType = this.stringField(body, 'event') ?? 'paystack.event';
+    const reference =
+      this.stringField(data, 'reference') ?? `paystack-${Date.now()}`;
+
+    const event = await this.prisma.webhookEvent.create({
+      data: {
+        provider: WebhookProvider.PAYSTACK,
+        providerEventId: `${eventType}:${reference}`,
+        status: WebhookEventStatus.RECEIVED,
+        payload: body as Prisma.InputJsonValue,
+      },
+    });
+
+    try {
+      const tenantId =
+        this.stringField(metadata, 'tenantId') ??
+        (await this.resolvePlatformTenantFromPaystackObject(data));
+      if (
+        tenantId &&
+        (eventType === 'charge.success' ||
+          eventType === 'subscription.create' ||
+          eventType === 'invoice.payment_success')
+      ) {
+        await this.completePaystackPlatformEvent({
+          tenantId,
+          providerEventId: `${eventType}:${reference}`,
+          eventType,
+          data,
+          metadata,
+        });
+        return this.prisma.webhookEvent.update({
+          where: { id: event.id },
+          data: {
+            tenantId,
+            status: WebhookEventStatus.PROCESSED,
+            processedAt: new Date(),
+          },
+        });
+      }
+
+      const paymentId = this.stringField(metadata, 'paymentId');
+      const payment = paymentId
+        ? await this.prisma.payment.findUnique({ where: { id: paymentId } })
+        : await this.prisma.payment.findFirst({
+            where: {
+              provider: PaymentProvider.PAYSTACK,
+              providerSessionId: reference,
+            },
+          });
+      if (eventType === 'charge.success' && payment) {
+        const completed = await this.completePayment({
+          tenantId: payment.tenantId,
+          paymentId: payment.id,
+          providerPaymentId: reference,
+        });
+        return this.prisma.webhookEvent.update({
+          where: { id: event.id },
+          data: {
+            tenantId: completed.tenantId,
+            status: WebhookEventStatus.PROCESSED,
+            processedAt: new Date(),
+          },
+        });
+      }
+
+      return this.prisma.webhookEvent.update({
+        where: { id: event.id },
+        data: { status: WebhookEventStatus.IGNORED, processedAt: new Date() },
+      });
+    } catch (error) {
+      return this.prisma.webhookEvent.update({
+        where: { id: event.id },
+        data: {
+          status: WebhookEventStatus.FAILED,
+          error:
+            error instanceof Error ? error.message : 'Paystack webhook error',
+          processedAt: new Date(),
+        },
+      });
+    }
+  }
+
   async sendReceipt(user: AuthUser, paymentId: string, dto: SendReceiptDto) {
     assertManager(user);
     const payment = await this.prisma.payment.findFirst({
@@ -612,11 +724,77 @@ export class PaymentsService {
     }
   }
 
+  private async completePaystackPlatformEvent(input: {
+    tenantId: string;
+    providerEventId: string;
+    eventType: string;
+    data: Record<string, unknown>;
+    metadata: Record<string, unknown>;
+  }) {
+    const amount =
+      this.numberField(input.data, 'amount') ??
+      this.numberFromString(input.metadata, 'monthlyPriceCents') ??
+      0;
+    const monthlyPriceCents =
+      this.numberFromString(input.metadata, 'monthlyPriceCents') ?? amount;
+    const setupFeeCents =
+      this.numberFromString(input.metadata, 'setupFeeCents') ?? 0;
+    const customer = this.asRecord(input.data.customer);
+    const subscription = this.asRecord(input.data.subscription);
+    const now = new Date();
+    const nextMonth = new Date(now);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+    await this.prisma.tenant.update({
+      where: { id: input.tenantId },
+      data: {
+        status: TenantStatus.ACTIVE,
+        subscriptionStatus: SubscriptionStatus.ACTIVE,
+        monthlyPriceCents: monthlyPriceCents || undefined,
+        setupFeeCents: setupFeeCents || undefined,
+        paystackCustomerCode:
+          this.stringField(customer, 'customer_code') ?? undefined,
+        paystackSubscriptionCode:
+          this.stringField(subscription, 'subscription_code') ?? undefined,
+        currentPeriodEnd: nextMonth,
+        nextBillingAt: nextMonth,
+        pastDueAt: null,
+        canceledAt: null,
+      },
+    });
+
+    if (setupFeeCents > 0) {
+      await this.recordPlatformBillingEventOnce({
+        tenantId: input.tenantId,
+        type: BillingEventType.SETUP_FEE_PAID,
+        providerEventId: `${input.providerEventId}:setup`,
+        amountCents: setupFeeCents,
+        provider: 'paystack',
+        note: 'Paystack setup fee paid.',
+        metadata: input.data,
+      });
+    }
+
+    await this.recordPlatformBillingEventOnce({
+      tenantId: input.tenantId,
+      type:
+        input.eventType === 'charge.success'
+          ? BillingEventType.SUBSCRIPTION_STARTED
+          : BillingEventType.SUBSCRIPTION_RENEWED,
+      providerEventId: `${input.providerEventId}:subscription`,
+      amountCents: monthlyPriceCents || amount || null,
+      provider: 'paystack',
+      note: 'Paystack subscription payment received.',
+      metadata: input.data,
+    });
+  }
+
   private async recordPlatformBillingEventOnce(input: {
     tenantId: string;
     type: BillingEventType;
     providerEventId: string;
     amountCents?: number | null;
+    provider?: string;
     note: string;
     metadata: Record<string, unknown>;
   }) {
@@ -634,12 +812,41 @@ export class PaymentsService {
         tenantId: input.tenantId,
         type: input.type,
         amountCents: input.amountCents,
-        provider: 'stripe',
+        provider: input.provider ?? 'stripe',
         providerEventId: input.providerEventId,
         note: input.note,
         metadata: input.metadata as Prisma.InputJsonValue,
       },
     });
+  }
+
+  private async resolvePlatformTenantFromPaystackObject(
+    value: Record<string, unknown>,
+  ) {
+    const metadata = this.asRecord(value.metadata);
+    const tenantId = this.stringField(metadata, 'tenantId');
+    if (tenantId) return tenantId;
+    const customer = this.asRecord(value.customer);
+    const subscription = this.asRecord(value.subscription);
+    const paystackCustomerCode = this.stringField(customer, 'customer_code');
+    const paystackSubscriptionCode = this.stringField(
+      subscription,
+      'subscription_code',
+    );
+    if (!paystackCustomerCode && !paystackSubscriptionCode) return null;
+    const tenant = await this.prisma.tenant.findFirst({
+      where: {
+        OR: [
+          paystackCustomerCode ? { paystackCustomerCode } : undefined,
+          paystackSubscriptionCode ? { paystackSubscriptionCode } : undefined,
+        ].filter(Boolean) as Array<{
+          paystackCustomerCode?: string;
+          paystackSubscriptionCode?: string;
+        }>,
+      },
+      select: { id: true },
+    });
+    return tenant?.id ?? null;
   }
 
   private async resolvePlatformTenantFromStripeObject(
@@ -719,9 +926,11 @@ export class PaymentsService {
     if (provider) {
       return provider;
     }
-    return process.env.STRIPE_SECRET_KEY
-      ? PaymentProvider.STRIPE
-      : PaymentProvider.MOCK;
+    return process.env.PAYSTACK_SECRET_KEY
+      ? PaymentProvider.PAYSTACK
+      : process.env.STRIPE_SECRET_KEY
+        ? PaymentProvider.STRIPE
+        : PaymentProvider.MOCK;
   }
 
   private async createStripeCheckoutSession(
@@ -792,6 +1001,61 @@ export class PaymentsService {
       url: `${apiBase}/payments/mock-checkout/${paymentId}`,
       sessionId: `mock_${invoiceId}_${paymentId}`,
       paymentIntentId: `mock_pi_${paymentId}`,
+    };
+  }
+
+  private async createPaystackCheckoutSession(
+    invoice: Prisma.InvoiceGetPayload<{
+      include: { customer: true; tenant: true; lineItems: true };
+    }>,
+    paymentId: string,
+  ) {
+    const secret = process.env.PAYSTACK_SECRET_KEY;
+    if (!secret) {
+      throw new BadRequestException('PAYSTACK_SECRET_KEY is not configured');
+    }
+    const email = invoice.customer.email ?? invoice.tenant.billingEmail;
+    if (!email) {
+      throw new BadRequestException(
+        'Customer or tenant billing email is required for Paystack',
+      );
+    }
+    const apiBase = process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api';
+    const reference = `cf_invoice_${paymentId}_${Date.now()}`;
+    const response = await fetch(
+      'https://api.paystack.co/transaction/initialize',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          amount: invoice.totalCents,
+          currency: (process.env.PAYSTACK_CURRENCY ?? 'NGN').toUpperCase(),
+          reference,
+          callback_url:
+            process.env.PAYMENT_SUCCESS_URL ??
+            `${apiBase}/invoices/${invoice.id}/html`,
+          metadata: {
+            paymentId,
+            invoiceId: invoice.id,
+            tenantId: invoice.tenantId,
+          },
+        }),
+      },
+    );
+    const payload = (await response.json()) as PaystackInitializeResponse;
+    if (!response.ok || !payload.status || !payload.data?.authorization_url) {
+      throw new BadRequestException(
+        payload.message || 'Paystack checkout failed',
+      );
+    }
+    return {
+      url: payload.data.authorization_url,
+      sessionId: payload.data.reference ?? reference,
+      paymentIntentId: payload.data.reference ?? reference,
     };
   }
 

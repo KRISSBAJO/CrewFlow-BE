@@ -94,6 +94,7 @@ enum AutomationRunStatus {
 enum WebhookProvider {
   WHATSAPP
   STRIPE
+  PAYSTACK
 }
 
 enum WebhookEventStatus {
@@ -149,6 +150,7 @@ enum LeadSource {
 
 enum PaymentProvider {
   STRIPE
+  PAYSTACK
   MOCK
   CASH
   BANK_TRANSFER
@@ -211,6 +213,8 @@ model Tenant {
   canceledAt           DateTime?
   stripeCustomerId     String?
   stripeSubscriptionId String?
+  paystackCustomerCode String?
+  paystackSubscriptionCode String?
   featureFlags         Json?
   planLimits           Json?
   suspendedAt          DateTime?

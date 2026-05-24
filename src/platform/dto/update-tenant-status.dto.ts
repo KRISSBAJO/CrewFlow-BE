@@ -71,6 +71,16 @@ export class UpdateTenantStatusDto {
   @IsString()
   stripeSubscriptionId?: string;
 
+  @ApiPropertyOptional({ example: 'CUS_xxx' })
+  @IsOptional()
+  @IsString()
+  paystackCustomerCode?: string;
+
+  @ApiPropertyOptional({ example: 'SUB_xxx' })
+  @IsOptional()
+  @IsString()
+  paystackSubscriptionCode?: string;
+
   @ApiPropertyOptional({ example: { aiReceptionist: true, retention: true } })
   @IsOptional()
   @IsObject()

@@ -366,7 +366,9 @@ export class TenantsService {
       pastDueAt: tenant.pastDueAt,
       canceledAt: tenant.canceledAt,
       stripeConfigured: Boolean(process.env.STRIPE_SECRET_KEY),
+      paystackConfigured: Boolean(process.env.PAYSTACK_SECRET_KEY),
       hasStripeCustomer: Boolean(tenant.stripeCustomerId),
+      hasPaystackCustomer: Boolean(tenant.paystackCustomerCode),
       limits,
       usage: counts,
       events,
@@ -381,9 +383,11 @@ export class TenantsService {
     if (monthlyPriceCents <= 0) {
       throw new BadRequestException('Monthly price must be configured first');
     }
-    const checkout = process.env.STRIPE_SECRET_KEY
-      ? await this.createStripeSubscriptionCheckout(tenant, monthlyPriceCents)
-      : this.createMockSubscriptionCheckout(tenant.id);
+    const checkout = process.env.PAYSTACK_SECRET_KEY
+      ? await this.createPaystackSubscriptionCheckout(tenant, monthlyPriceCents)
+      : process.env.STRIPE_SECRET_KEY
+        ? await this.createStripeSubscriptionCheckout(tenant, monthlyPriceCents)
+        : this.createMockSubscriptionCheckout(tenant.id);
 
     await this.prisma.platformBillingEvent.create({
       data: {
@@ -540,6 +544,70 @@ export class TenantsService {
       mock: true,
       sessionId: `mock_tenant_${tenantId}_${Date.now()}`,
       url: `${apiBase}/platform/mock-billing/${tenantId}/success`,
+    };
+  }
+
+  private async createPaystackSubscriptionCheckout(
+    tenant: Tenant,
+    monthlyPriceCents: number,
+  ) {
+    const secret = process.env.PAYSTACK_SECRET_KEY;
+    if (!secret) {
+      throw new BadRequestException('PAYSTACK_SECRET_KEY is not configured');
+    }
+    if (!tenant.billingEmail) {
+      throw new BadRequestException('Billing email is required for Paystack');
+    }
+    const apiBase = process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api';
+    const reference = `cf_tenant_${tenant.id}_${Date.now()}`;
+    const plan =
+      process.env.PAYSTACK_TENANT_PLAN_CODE ??
+      process.env.PAYSTACK_PLATFORM_PLAN_CODE;
+    const body: Record<string, unknown> = {
+      email: tenant.billingEmail,
+      amount: monthlyPriceCents,
+      currency: (process.env.PAYSTACK_CURRENCY ?? 'NGN').toUpperCase(),
+      reference,
+      callback_url:
+        process.env.TENANT_BILLING_SUCCESS_URL ??
+        `${apiBase.replace('/api', '')}/app?billing=success`,
+      metadata: {
+        kind: 'platform_subscription',
+        tenantId: tenant.id,
+        monthlyPriceCents,
+        setupFeeCents: 0,
+      },
+    };
+    if (plan) {
+      body.plan = plan;
+    }
+
+    const response = await fetch(
+      'https://api.paystack.co/transaction/initialize',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const payload = (await response.json()) as {
+      status: boolean;
+      message: string;
+      data?: { authorization_url?: string; reference?: string };
+    };
+    if (!response.ok || !payload.status || !payload.data?.authorization_url) {
+      throw new BadRequestException(
+        payload.message || 'Paystack checkout failed',
+      );
+    }
+    return {
+      provider: 'paystack',
+      mock: false,
+      sessionId: payload.data.reference ?? reference,
+      url: payload.data.authorization_url,
     };
   }
 
