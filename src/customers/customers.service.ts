@@ -44,6 +44,7 @@ export class CustomersService {
         name: customer.name.trim(),
         phone: customer.phone.trim(),
         email: customer.email?.trim() || undefined,
+        avatarUrl: customer.avatarUrl?.trim() || undefined,
         notes: customer.notes?.trim() || undefined,
       }))
       .filter((customer) => customer.name && customer.phone)
@@ -86,6 +87,7 @@ export class CustomersService {
         update: {
           name: row.name,
           email: row.email,
+          avatarUrl: row.avatarUrl,
           notes: row.notes,
         },
         select: { id: true },

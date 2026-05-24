@@ -14,6 +14,7 @@ export class ServicesService {
         tenantId,
         title: dto.title,
         description: dto.description,
+        imageUrl: dto.imageUrl,
         durationMinutes: dto.durationMinutes,
         priceCents: toCents(dto.price),
       },
@@ -33,6 +34,7 @@ export class ServicesService {
       data: {
         title: dto.title,
         description: dto.description,
+        imageUrl: dto.imageUrl,
         durationMinutes: dto.durationMinutes,
         priceCents: dto.price === undefined ? undefined : toCents(dto.price),
         active: dto.active,

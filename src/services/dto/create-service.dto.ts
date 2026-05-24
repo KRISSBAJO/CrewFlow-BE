@@ -13,6 +13,13 @@ export class CreateServiceDto {
   @IsString()
   description?: string;
 
+  @ApiPropertyOptional({
+    example: 'https://res.cloudinary.com/demo/image/upload/services/deep-clean.jpg',
+  })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
   @ApiProperty({ example: 180, minimum: 5 })
   @IsInt()
   @Min(5)

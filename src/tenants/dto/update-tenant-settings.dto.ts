@@ -18,6 +18,20 @@ export class UpdateTenantSettingsDto {
   @IsString()
   industry?: string;
 
+  @ApiPropertyOptional({
+    example: 'https://res.cloudinary.com/demo/image/upload/tenants/sparkle-logo.png',
+  })
+  @IsOptional()
+  @IsString()
+  logoUrl?: string;
+
+  @ApiPropertyOptional({
+    example: 'https://res.cloudinary.com/demo/image/upload/tenants/sparkle-cover.jpg',
+  })
+  @IsOptional()
+  @IsString()
+  coverImageUrl?: string;
+
   @ApiPropertyOptional({ example: '+15551234567' })
   @IsOptional()
   @IsString()

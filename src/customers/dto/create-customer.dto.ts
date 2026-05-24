@@ -16,6 +16,13 @@ export class CreateCustomerDto {
   email?: string;
 
   @ApiPropertyOptional({
+    example: 'https://res.cloudinary.com/demo/image/upload/customers/nia.jpg',
+  })
+  @IsOptional()
+  @IsString()
+  avatarUrl?: string;
+
+  @ApiPropertyOptional({
     example: 'Prefers WhatsApp. Has a dog. Gate code 4821.',
   })
   @IsOptional()

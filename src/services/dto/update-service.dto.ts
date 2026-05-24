@@ -21,6 +21,13 @@ export class UpdateServiceDto {
   @IsString()
   description?: string;
 
+  @ApiPropertyOptional({
+    example: 'https://res.cloudinary.com/demo/image/upload/services/deep-clean.jpg',
+  })
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
   @ApiPropertyOptional({ example: 240, minimum: 5 })
   @IsOptional()
   @IsInt()

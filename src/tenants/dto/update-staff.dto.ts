@@ -24,6 +24,13 @@ export class UpdateStaffDto {
   @IsString()
   phone?: string;
 
+  @ApiPropertyOptional({
+    example: 'https://res.cloudinary.com/demo/image/upload/staff/marcus.jpg',
+  })
+  @IsOptional()
+  @IsString()
+  avatarUrl?: string;
+
   @ApiPropertyOptional({ enum: UserRole, example: UserRole.STAFF })
   @IsOptional()
   @IsEnum(UserRole)

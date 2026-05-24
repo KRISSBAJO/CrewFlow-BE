@@ -17,6 +17,13 @@ export class UpdateCustomerDto {
   @IsEmail()
   email?: string;
 
+  @ApiPropertyOptional({
+    example: 'https://res.cloudinary.com/demo/image/upload/customers/nia.jpg',
+  })
+  @IsOptional()
+  @IsString()
+  avatarUrl?: string;
+
   @ApiPropertyOptional({ example: 'Recurring customer. Use side entrance.' })
   @IsOptional()
   @IsString()

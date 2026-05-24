@@ -24,6 +24,14 @@ export class ImportCustomerRowDto {
   email?: string;
 
   @ApiProperty({
+    example: 'https://res.cloudinary.com/demo/image/upload/customers/nia.jpg',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  avatarUrl?: string;
+
+  @ApiProperty({
     example: 'Recurring customer. Use side entrance.',
     required: false,
   })

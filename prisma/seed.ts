@@ -36,6 +36,8 @@ async function main() {
       status: 'ACTIVE',
       subscriptionStatus: 'ACTIVE',
       subscriptionPlan: 'platform',
+      logoUrl:
+        'https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=400&q=80',
     },
     create: {
       businessName: 'CrewFlow Platform',
@@ -44,6 +46,8 @@ async function main() {
       status: 'ACTIVE',
       subscriptionStatus: 'ACTIVE',
       subscriptionPlan: 'platform',
+      logoUrl:
+        'https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=400&q=80',
     },
   });
 
@@ -57,6 +61,8 @@ async function main() {
     update: {
       role: UserRole.PLATFORM_ADMIN,
       active: true,
+      avatarUrl:
+        'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&w=300&q=80',
     },
     create: {
       tenantId: platformTenant.id,
@@ -64,6 +70,8 @@ async function main() {
       email: 'admin@crewflow.test',
       passwordHash,
       role: UserRole.PLATFORM_ADMIN,
+      avatarUrl:
+        'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&w=300&q=80',
     },
   });
 
@@ -77,6 +85,8 @@ async function main() {
     update: {
       role: UserRole.PLATFORM_SUPPORT,
       active: true,
+      avatarUrl:
+        'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=300&q=80',
     },
     create: {
       tenantId: platformTenant.id,
@@ -84,6 +94,8 @@ async function main() {
       email: 'support@crewflow.test',
       passwordHash,
       role: UserRole.PLATFORM_SUPPORT,
+      avatarUrl:
+        'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=300&q=80',
     },
   });
 
@@ -93,6 +105,10 @@ async function main() {
       status: 'ACTIVE',
       subscriptionStatus: 'ACTIVE',
       billingEmail: 'owner@sparkle.test',
+      logoUrl:
+        'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=400&q=80',
+      coverImageUrl:
+        'https://images.unsplash.com/photo-1527515637462-cff94eecc1ac?auto=format&fit=crop&w=1400&q=80',
       monthlyPriceCents: 29900,
       setupFeeCents: 100000,
       currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60_000),
@@ -117,6 +133,10 @@ async function main() {
       subscriptionStatus: 'ACTIVE',
       subscriptionPlan: 'pilot',
       billingEmail: 'owner@sparkle.test',
+      logoUrl:
+        'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=400&q=80',
+      coverImageUrl:
+        'https://images.unsplash.com/photo-1527515637462-cff94eecc1ac?auto=format&fit=crop&w=1400&q=80',
       monthlyPriceCents: 29900,
       setupFeeCents: 100000,
       currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60_000),
@@ -137,7 +157,10 @@ async function main() {
 
   const owner = await prisma.user.upsert({
     where: { tenantId_email: { tenantId: tenant.id, email: 'owner@sparkle.test' } },
-    update: {},
+    update: {
+      avatarUrl:
+        'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=300&q=80',
+    },
     create: {
       tenantId: tenant.id,
       name: 'Ava Johnson',
@@ -145,12 +168,17 @@ async function main() {
       passwordHash,
       role: UserRole.OWNER,
       phone: '+15550101010',
+      avatarUrl:
+        'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=300&q=80',
     },
   });
 
   const staff = await prisma.user.upsert({
     where: { tenantId_email: { tenantId: tenant.id, email: 'crew@sparkle.test' } },
-    update: {},
+    update: {
+      avatarUrl:
+        'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=300&q=80',
+    },
     create: {
       tenantId: tenant.id,
       name: 'Marcus Lee',
@@ -158,12 +186,17 @@ async function main() {
       passwordHash,
       role: UserRole.STAFF,
       phone: '+15550101011',
+      avatarUrl:
+        'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=300&q=80',
     },
   });
 
   const manager = await prisma.user.upsert({
     where: { tenantId_email: { tenantId: tenant.id, email: 'manager@sparkle.test' } },
-    update: {},
+    update: {
+      avatarUrl:
+        'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=300&q=80',
+    },
     create: {
       tenantId: tenant.id,
       name: 'Priya Shah',
@@ -171,16 +204,23 @@ async function main() {
       passwordHash,
       role: UserRole.MANAGER,
       phone: '+15550101012',
+      avatarUrl:
+        'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=300&q=80',
     },
   });
 
   const deepClean = await prisma.service.upsert({
     where: { tenantId_title: { tenantId: tenant.id, title: 'Deep Home Cleaning' } },
-    update: {},
+    update: {
+      imageUrl:
+        'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=900&q=80',
+    },
     create: {
       tenantId: tenant.id,
       title: 'Deep Home Cleaning',
       description: 'Kitchen, bathrooms, floors, dusting, and detailed reset.',
+      imageUrl:
+        'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=900&q=80',
       durationMinutes: 180,
       priceCents: 24900,
     },
@@ -188,11 +228,16 @@ async function main() {
 
   const standardClean = await prisma.service.upsert({
     where: { tenantId_title: { tenantId: tenant.id, title: 'Standard Cleaning' } },
-    update: {},
+    update: {
+      imageUrl:
+        'https://images.unsplash.com/photo-1527515637462-cff94eecc1ac?auto=format&fit=crop&w=900&q=80',
+    },
     create: {
       tenantId: tenant.id,
       title: 'Standard Cleaning',
       description: 'Recurring maintenance cleaning for active customers.',
+      imageUrl:
+        'https://images.unsplash.com/photo-1527515637462-cff94eecc1ac?auto=format&fit=crop&w=900&q=80',
       durationMinutes: 120,
       priceCents: 14900,
     },
@@ -200,36 +245,51 @@ async function main() {
 
   const customer = await prisma.customer.upsert({
     where: { tenantId_phone: { tenantId: tenant.id, phone: '+15550102020' } },
-    update: {},
+    update: {
+      avatarUrl:
+        'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=300&q=80',
+    },
     create: {
       tenantId: tenant.id,
       name: 'Nia Carter',
       phone: '+15550102020',
       email: 'nia@example.com',
+      avatarUrl:
+        'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=300&q=80',
       notes: 'Prefers WhatsApp. Has a dog. Gate code 4821.',
     },
   });
 
   const leadCustomer = await prisma.customer.upsert({
     where: { tenantId_phone: { tenantId: tenant.id, phone: '+15550103030' } },
-    update: {},
+    update: {
+      avatarUrl:
+        'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80',
+    },
     create: {
       tenantId: tenant.id,
       name: 'Jordan Ellis',
       phone: '+15550103030',
       email: 'jordan@example.com',
+      avatarUrl:
+        'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80',
       notes: 'Asked for a move-out clean and wants text reminders.',
     },
   });
 
   const overdueCustomer = await prisma.customer.upsert({
     where: { tenantId_phone: { tenantId: tenant.id, phone: '+15550104040' } },
-    update: {},
+    update: {
+      avatarUrl:
+        'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=300&q=80',
+    },
     create: {
       tenantId: tenant.id,
       name: 'Maya Robinson',
       phone: '+15550104040',
       email: 'maya@example.com',
+      avatarUrl:
+        'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=300&q=80',
       notes: 'Repeat monthly customer. Usually pays by card link.',
     },
   });
