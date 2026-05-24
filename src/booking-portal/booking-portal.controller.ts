@@ -21,6 +21,34 @@ export class BookingPortalController {
   }
 
   @Public()
+  @Get(':slug/bookings/:bookingId')
+  @ApiOperation({
+    summary: 'Public customer booking status',
+    description:
+      'Returns the customer-safe status payload for a booking created from the public portal.',
+  })
+  getBooking(
+    @Param('slug') slug: string,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.portal.getBooking(slug, bookingId);
+  }
+
+  @Public()
+  @Get(':slug/invoices/:invoiceId')
+  @ApiOperation({
+    summary: 'Public customer invoice status',
+    description:
+      'Returns the customer-safe invoice and checkout payload for a portal invoice.',
+  })
+  getInvoice(
+    @Param('slug') slug: string,
+    @Param('invoiceId') invoiceId: string,
+  ) {
+    return this.portal.getInvoice(slug, invoiceId);
+  }
+
+  @Public()
   @Post(':slug/book')
   @ApiOperation({
     summary: 'Create a public customer booking',

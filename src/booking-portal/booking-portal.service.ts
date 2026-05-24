@@ -6,6 +6,7 @@ import {
 import {
   AutomationTrigger,
   BookingStatus,
+  InvoiceStatus,
   TenantStatus,
   UserRole,
 } from '@prisma/client';
@@ -16,6 +17,7 @@ import { AuthUser } from '../common/current-user.decorator';
 import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WorkflowsService } from '../workflows/workflows.service';
 import { CreatePortalBookingDto } from './dto/create-portal-booking.dto';
 
 @Injectable()
@@ -26,6 +28,7 @@ export class BookingPortalService {
     private readonly automations: AutomationsService,
     private readonly invoices: InvoicesService,
     private readonly payments: PaymentsService,
+    private readonly workflows: WorkflowsService,
   ) {}
 
   async getPortal(slug: string) {
@@ -80,7 +83,10 @@ export class BookingPortalService {
   async createBooking(slug: string, dto: CreatePortalBookingDto) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { slug },
-      include: { services: { where: { active: true } } },
+      include: {
+        services: { where: { active: true } },
+        receptionistConfig: true,
+      },
     });
 
     if (!tenant || !this.isBookableTenant(tenant.status)) {
@@ -96,9 +102,7 @@ export class BookingPortalService {
     if (Number.isNaN(startTime.getTime())) {
       throw new BadRequestException('Invalid start time');
     }
-    if (startTime.getTime() < Date.now() - 60_000) {
-      throw new BadRequestException('Choose a future appointment time');
-    }
+    this.assertBookableWindow(startTime, tenant.receptionistConfig);
 
     const notes = [dto.address ? `Address: ${dto.address}` : null, dto.notes]
       .filter(Boolean)
@@ -159,6 +163,7 @@ export class BookingPortalService {
       customerId: customer.id,
       bookingId: booking.id,
     });
+    await this.workflows.handleBookingStatusChanged(booking);
 
     let invoiceResult: Awaited<
       ReturnType<PaymentsService['createInvoicePaymentLink']>
@@ -182,11 +187,139 @@ export class BookingPortalService {
       customer,
       invoice: invoiceResult?.invoice ?? booking.invoice ?? null,
       payment: invoiceResult?.payment ?? null,
+      links: {
+        successPath: `/book/${tenant.slug}/success?bookingId=${booking.id}`,
+        invoicePath: invoiceResult?.invoice
+          ? `/book/${tenant.slug}/invoice/${invoiceResult.invoice.id}`
+          : null,
+      },
+    };
+  }
+
+  async getBooking(slug: string, bookingId: string) {
+    const booking = await this.prisma.booking.findFirst({
+      where: { id: bookingId, tenant: { slug } },
+      include: {
+        tenant: {
+          select: {
+            id: true,
+            businessName: true,
+            slug: true,
+            industry: true,
+            status: true,
+          },
+        },
+        customer: {
+          select: { id: true, name: true, phone: true, email: true },
+        },
+        service: true,
+        invoice: {
+          include: {
+            payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+            lineItems: true,
+          },
+        },
+        assignedStaff: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!booking || !this.isBookableTenant(booking.tenant.status)) {
+      throw new NotFoundException('Booking not found');
+    }
+
+    return {
+      tenant: booking.tenant,
+      booking,
+      invoice: booking.invoice,
+      payment: booking.invoice?.payments[0] ?? null,
+      nextSteps: this.bookingNextSteps(booking.status, booking.invoice?.status),
+    };
+  }
+
+  async getInvoice(slug: string, invoiceId: string) {
+    const invoice = await this.prisma.invoice.findFirst({
+      where: { id: invoiceId, tenant: { slug } },
+      include: {
+        tenant: {
+          select: {
+            id: true,
+            businessName: true,
+            slug: true,
+            industry: true,
+            status: true,
+          },
+        },
+        customer: {
+          select: { id: true, name: true, phone: true, email: true },
+        },
+        booking: { include: { service: true, assignedStaff: true } },
+        lineItems: true,
+        payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+      },
+    });
+
+    if (!invoice || !this.isBookableTenant(invoice.tenant.status)) {
+      throw new NotFoundException('Invoice not found');
+    }
+
+    return {
+      tenant: invoice.tenant,
+      invoice,
+      payment: invoice.payments[0] ?? null,
+      checkoutUrl:
+        invoice.paymentUrl ?? invoice.payments[0]?.checkoutUrl ?? null,
     };
   }
 
   private isBookableTenant(status: TenantStatus) {
     return status === TenantStatus.ACTIVE || status === TenantStatus.TRIAL;
+  }
+
+  private assertBookableWindow(
+    startTime: Date,
+    config?: {
+      bookingBufferMinutes: number;
+      maxAdvanceDays: number;
+    } | null,
+  ) {
+    const now = new Date();
+    const bufferMinutes = config?.bookingBufferMinutes ?? 30;
+    const maxAdvanceDays = config?.maxAdvanceDays ?? 30;
+    const earliest = addMinutes(now, bufferMinutes);
+    const latest = new Date(now);
+    latest.setDate(latest.getDate() + maxAdvanceDays);
+
+    if (startTime < earliest) {
+      throw new BadRequestException(
+        `Choose a time at least ${bufferMinutes} minutes from now`,
+      );
+    }
+    if (startTime > latest) {
+      throw new BadRequestException(
+        `Choose a time within the next ${maxAdvanceDays} days`,
+      );
+    }
+  }
+
+  private bookingNextSteps(
+    status: BookingStatus,
+    invoiceStatus?: InvoiceStatus | null,
+  ) {
+    if (status === BookingStatus.CANCELLED) {
+      return ['The appointment was cancelled. Contact the business to rebook.'];
+    }
+    if (status === BookingStatus.COMPLETED) {
+      return invoiceStatus === InvoiceStatus.PAID
+        ? ['Service is complete and payment is recorded.']
+        : ['Service is complete. Please pay the invoice when ready.'];
+    }
+    return [
+      'The business will confirm staff assignment.',
+      'You will receive appointment updates before arrival.',
+      invoiceStatus === InvoiceStatus.PAID
+        ? 'Payment is recorded.'
+        : 'Pay online to keep checkout simple.',
+    ];
   }
 
   private async resolvePortalActor(tenantId: string): Promise<AuthUser> {
