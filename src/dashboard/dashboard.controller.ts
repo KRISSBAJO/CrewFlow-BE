@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
 import { DashboardService } from './dashboard.service';
@@ -14,5 +14,15 @@ export class DashboardController {
     @Query('to') to?: string,
   ) {
     return this.dashboard.summary(user.tenantId, from, to);
+  }
+
+  @Get('weekly-digest')
+  weeklyDigest(@CurrentUser() user: AuthUser) {
+    return this.dashboard.weeklyDigest(user);
+  }
+
+  @Post('weekly-digest/send')
+  sendWeeklyDigest(@CurrentUser() user: AuthUser) {
+    return this.dashboard.sendWeeklyDigest(user);
   }
 }
