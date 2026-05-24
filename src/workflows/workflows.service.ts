@@ -570,6 +570,85 @@ export class WorkflowsService {
     };
   }
 
+  async scanTrialExpiryForTenant(
+    tenantId: string,
+    source = 'scheduler',
+    actorId?: string,
+  ) {
+    const now = new Date();
+    const warningWindow = new Date(now.getTime() + 7 * 86_400_000);
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: tenantId },
+      select: {
+        id: true,
+        businessName: true,
+        subscriptionStatus: true,
+        trialEndsAt: true,
+        monthlyPriceCents: true,
+      },
+    });
+
+    if (
+      tenant.subscriptionStatus !== SubscriptionStatus.TRIALING ||
+      !tenant.trialEndsAt ||
+      tenant.trialEndsAt > warningWindow
+    ) {
+      return {
+        scannedAt: now,
+        subscriptionStatus: tenant.subscriptionStatus,
+        trialEndsAt: tenant.trialEndsAt,
+        actionsCreatedOrUpdated: 0,
+        actions: [],
+      };
+    }
+
+    const daysUntilTrialEnds = Math.ceil(
+      (tenant.trialEndsAt.getTime() - now.getTime()) / 86_400_000,
+    );
+    const expired = daysUntilTrialEnds < 0;
+
+    if (expired) {
+      await this.prisma.tenant.update({
+        where: { id: tenantId },
+        data: {
+          subscriptionStatus: SubscriptionStatus.PAST_DUE,
+          pastDueAt: now,
+        },
+      });
+    }
+
+    const action = await this.upsertAction({
+      tenantId,
+      type: ActionType.COLLECT_PAYMENT,
+      priority: expired ? ActionPriority.URGENT : ActionPriority.HIGH,
+      title: expired
+        ? 'Convert expired CrewFlow trial'
+        : 'Convert CrewFlow trial before it expires',
+      description: expired
+        ? 'The trial has expired. Collect payment details or decide whether to suspend access.'
+        : 'The trial is ending soon. Confirm decision maker, payment method, and launch path.',
+      assignedToId: actorId,
+      dueAt: now,
+      metadata: {
+        kind: 'trial_expiry',
+        source,
+        trialEndsAt: tenant.trialEndsAt,
+        daysUntilTrialEnds,
+        monthlyPriceCents: tenant.monthlyPriceCents,
+      },
+    });
+
+    return {
+      scannedAt: now,
+      subscriptionStatus: expired
+        ? SubscriptionStatus.PAST_DUE
+        : tenant.subscriptionStatus,
+      trialEndsAt: tenant.trialEndsAt,
+      actionsCreatedOrUpdated: 1,
+      actions: [action],
+    };
+  }
+
   private async upsertAction(input: {
     tenantId: string;
     type: ActionType;

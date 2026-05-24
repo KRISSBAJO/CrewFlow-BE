@@ -16,12 +16,17 @@ import {
   TenantStatus,
   UserRole,
   WebhookEventStatus,
+  WebhookProvider,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { AuditService } from '../audit/audit.service';
+import { AutomationsService } from '../automations/automations.service';
 import type { AuthUser } from '../common/current-user.decorator';
+import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WhatsappWebhookService } from '../webhooks/whatsapp-webhook.service';
+import { WorkflowsService } from '../workflows/workflows.service';
 import { ArchiveTenantDto } from './dto/archive-tenant.dto';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateBillingEventDto } from './dto/create-billing-event.dto';
@@ -69,6 +74,10 @@ export class PlatformService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly jwt: JwtService,
+    private readonly automations: AutomationsService,
+    private readonly payments: PaymentsService,
+    private readonly whatsAppWebhooks: WhatsappWebhookService,
+    private readonly workflows: WorkflowsService,
   ) {}
 
   async metrics() {
@@ -133,6 +142,163 @@ export class PlatformService {
       paidRevenueCents: paidRevenue._sum.totalCents ?? 0,
       mrrCents: mrr._sum.monthlyPriceCents ?? 0,
       pastDueTenants,
+    };
+  }
+
+  async providerHealth() {
+    const [
+      webhookStatus,
+      failedAutomations,
+      pendingAutomations,
+      recentWebhooks,
+      recentRuns,
+    ] = await Promise.all([
+      this.prisma.webhookEvent.groupBy({
+        by: ['provider', 'status'],
+        _count: { _all: true },
+      }),
+      this.prisma.automationRun.count({
+        where: { status: AutomationRunStatus.FAILED },
+      }),
+      this.prisma.automationRun.count({
+        where: { status: AutomationRunStatus.PENDING },
+      }),
+      this.prisma.webhookEvent.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: { tenant: true },
+        take: 10,
+      }),
+      this.prisma.automationRun.findMany({
+        orderBy: { updatedAt: 'desc' },
+        include: { tenant: true, customer: true },
+        take: 10,
+      }),
+    ]);
+
+    const webhooks = Object.values(WebhookProvider).reduce(
+      (acc, provider) => {
+        const rows = webhookStatus.filter((item) => item.provider === provider);
+        acc[provider] = rows.reduce(
+          (counts, row) => ({
+            ...counts,
+            [row.status]: row._count._all,
+          }),
+          {} as Record<WebhookEventStatus, number>,
+        );
+        return acc;
+      },
+      {} as Record<WebhookProvider, Record<WebhookEventStatus, number>>,
+    );
+
+    return {
+      checkedAt: new Date(),
+      integrations: {
+        whatsapp: {
+          configured: Boolean(
+            process.env.WHATSAPP_ACCESS_TOKEN &&
+            process.env.WHATSAPP_PHONE_NUMBER_ID,
+          ),
+          verifyTokenConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
+          appSecretConfigured: Boolean(process.env.WHATSAPP_APP_SECRET),
+        },
+        stripe: {
+          configured: Boolean(process.env.STRIPE_SECRET_KEY),
+          webhookSecretConfigured: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+        },
+        paystack: {
+          configured: Boolean(process.env.PAYSTACK_SECRET_KEY),
+          currency: process.env.PAYSTACK_CURRENCY ?? 'NGN',
+          platformPlanConfigured: Boolean(
+            process.env.PAYSTACK_PLATFORM_PLAN_CODE,
+          ),
+          tenantPlanConfigured: Boolean(process.env.PAYSTACK_TENANT_PLAN_CODE),
+        },
+      },
+      queues: {
+        failedAutomations,
+        pendingAutomations,
+      },
+      webhooks,
+      recentWebhooks,
+      recentRuns,
+    };
+  }
+
+  async scanTrialExpiry(user: AuthUser) {
+    const tenants = await this.prisma.tenant.findMany({
+      where: { subscriptionStatus: SubscriptionStatus.TRIALING },
+      select: { id: true },
+    });
+    const results: Array<
+      Awaited<ReturnType<WorkflowsService['scanTrialExpiryForTenant']>>
+    > = [];
+    for (const tenant of tenants) {
+      results.push(
+        await this.workflows.scanTrialExpiryForTenant(
+          tenant.id,
+          'platform-admin',
+          user.sub,
+        ),
+      );
+    }
+    const actionsCreatedOrUpdated = results.reduce(
+      (sum, item) => sum + item.actionsCreatedOrUpdated,
+      0,
+    );
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_TRIAL_EXPIRY_SCAN',
+      entityType: 'Tenant',
+      summary: `Scanned ${tenants.length} trials and surfaced ${actionsCreatedOrUpdated} actions`,
+      metadata: { tenantCount: tenants.length, actionsCreatedOrUpdated },
+    });
+    return {
+      scannedAt: new Date(),
+      tenantCount: tenants.length,
+      actionsCreatedOrUpdated,
+      results,
+    };
+  }
+
+  async scanPastDueBilling(user: AuthUser) {
+    const tenants = await this.prisma.tenant.findMany({
+      where: {
+        subscriptionStatus: {
+          in: [SubscriptionStatus.PAST_DUE, SubscriptionStatus.UNPAID],
+        },
+      },
+      select: { id: true },
+    });
+    const results: Array<
+      Awaited<ReturnType<WorkflowsService['scanBillingRecoveryForTenant']>>
+    > = [];
+    for (const tenant of tenants) {
+      results.push(
+        await this.workflows.scanBillingRecoveryForTenant(
+          tenant.id,
+          'platform-admin',
+          user.sub,
+        ),
+      );
+    }
+    const actionsCreatedOrUpdated = results.reduce(
+      (sum, item) => sum + item.actionsCreatedOrUpdated,
+      0,
+    );
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_PAST_DUE_BILLING_SCAN',
+      entityType: 'Tenant',
+      summary: `Scanned ${tenants.length} past-due tenants and surfaced ${actionsCreatedOrUpdated} actions`,
+      metadata: { tenantCount: tenants.length, actionsCreatedOrUpdated },
+    });
+    return {
+      scannedAt: new Date(),
+      tenantCount: tenants.length,
+      actionsCreatedOrUpdated,
+      results,
     };
   }
 
@@ -1553,28 +1719,20 @@ export class PlatformService {
     const run = await this.prisma.automationRun.findUniqueOrThrow({
       where: { id },
     });
-    const updated = await this.prisma.automationRun.update({
-      where: { id },
-      data: {
-        status: AutomationRunStatus.PENDING,
-        error: null,
-        scheduledFor: new Date(),
-        metadata: {
-          ...(run.metadata as Record<string, unknown> | null),
-          platformRetryReason: dto.reason,
-          platformRetriedBy: user.sub,
-          platformRetriedAt: new Date().toISOString(),
-        },
-      },
-    });
+    const updated = await this.automations.retry(
+      run.tenantId,
+      id,
+      user.sub,
+      dto.reason,
+    );
 
     await this.auditService.record({
       tenantId: run.tenantId,
       actorId: user.sub,
-      action: 'PLATFORM_AUTOMATION_RETRY_QUEUED',
+      action: 'PLATFORM_AUTOMATION_RETRIED',
       entityType: 'AutomationRun',
       entityId: id,
-      summary: `Platform admin queued ${run.trigger} automation retry`,
+      summary: `Platform admin retried ${run.trigger} automation`,
       metadata: { reason: dto.reason },
     });
 
@@ -1589,31 +1747,36 @@ export class PlatformService {
     const event = await this.prisma.webhookEvent.findUniqueOrThrow({
       where: { id },
     });
-    const updated = await this.prisma.webhookEvent.update({
+    const replayPayload = {
+      ...(event.payload as Record<string, unknown> | null),
+      platformReplay: {
+        reason: dto.reason,
+        replayedBy: user.sub,
+        replayedAt: new Date().toISOString(),
+      },
+    };
+    await this.prisma.webhookEvent.update({
       where: { id },
       data: {
         status: WebhookEventStatus.RECEIVED,
         error: null,
         processedAt: null,
-        payload: {
-          ...(event.payload as Record<string, unknown> | null),
-          platformReplay: {
-            reason: dto.reason,
-            replayedBy: user.sub,
-            replayedAt: new Date().toISOString(),
-          },
-        },
+        payload: replayPayload,
       },
     });
+    const updated =
+      event.provider === WebhookProvider.WHATSAPP
+        ? await this.whatsAppWebhooks.replay(id)
+        : await this.payments.replayWebhookEvent(id);
 
     await this.auditService.record({
       tenantId: event.tenantId ?? user.tenantId,
       actorId: user.sub,
-      action: 'PLATFORM_WEBHOOK_REPLAY_QUEUED',
+      action: 'PLATFORM_WEBHOOK_REPLAYED',
       entityType: 'WebhookEvent',
       entityId: id,
-      summary: `Platform admin queued ${event.provider} webhook replay`,
-      metadata: { reason: dto.reason },
+      summary: `Platform admin replayed ${event.provider} webhook`,
+      metadata: { reason: dto.reason, status: updated.status },
     });
 
     return updated;

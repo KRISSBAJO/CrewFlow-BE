@@ -534,6 +534,255 @@ export class PaymentsService {
     }
   }
 
+  async replayWebhookEvent(eventId: string) {
+    const event = await this.prisma.webhookEvent.findUniqueOrThrow({
+      where: { id: eventId },
+    });
+    if (
+      event.provider !== WebhookProvider.STRIPE &&
+      event.provider !== WebhookProvider.PAYSTACK
+    ) {
+      throw new BadRequestException(
+        'Webhook provider is not handled by payments',
+      );
+    }
+
+    await this.prisma.webhookEvent.update({
+      where: { id: event.id },
+      data: {
+        status: WebhookEventStatus.RECEIVED,
+        error: null,
+        processedAt: null,
+      },
+    });
+
+    return event.provider === WebhookProvider.STRIPE
+      ? this.reprocessStripeWebhookEvent(event.id, event.payload)
+      : this.reprocessPaystackWebhookEvent(event.id, event.payload);
+  }
+
+  private async reprocessStripeWebhookEvent(eventId: string, payload: unknown) {
+    const body = this.asRecord(payload);
+    const providerEventId =
+      this.stringField(body, 'id') ?? `stripe-replay-${eventId}`;
+
+    try {
+      const eventType = this.stringField(body, 'type');
+      const data = this.asRecord(body.data);
+      const stripeObject = this.asRecord(data.object);
+
+      if (eventType?.startsWith('invoice.')) {
+        const tenantId =
+          await this.resolvePlatformTenantFromStripeObject(stripeObject);
+        if (tenantId) {
+          await this.applyPlatformInvoiceEvent({
+            tenantId,
+            eventType,
+            providerEventId,
+            stripeObject,
+          });
+          return this.prisma.webhookEvent.update({
+            where: { id: eventId },
+            data: {
+              tenantId,
+              status: WebhookEventStatus.PROCESSED,
+              processedAt: new Date(),
+            },
+          });
+        }
+      }
+
+      if (eventType === 'customer.subscription.deleted') {
+        const tenantId =
+          await this.resolvePlatformTenantFromStripeObject(stripeObject);
+        if (tenantId) {
+          await this.prisma.tenant.update({
+            where: { id: tenantId },
+            data: {
+              status: TenantStatus.CHURNED,
+              subscriptionStatus: SubscriptionStatus.CANCELED,
+              canceledAt: new Date(),
+            },
+          });
+          await this.recordPlatformBillingEventOnce({
+            tenantId,
+            type: BillingEventType.CANCELED,
+            providerEventId,
+            amountCents: null,
+            note: 'Stripe subscription canceled.',
+            metadata: stripeObject,
+          });
+          return this.prisma.webhookEvent.update({
+            where: { id: eventId },
+            data: {
+              tenantId,
+              status: WebhookEventStatus.PROCESSED,
+              processedAt: new Date(),
+            },
+          });
+        }
+      }
+
+      if (eventType !== 'checkout.session.completed') {
+        return this.prisma.webhookEvent.update({
+          where: { id: eventId },
+          data: {
+            status: WebhookEventStatus.IGNORED,
+            processedAt: new Date(),
+          },
+        });
+      }
+
+      const session = stripeObject;
+      const metadata = this.asRecord(session.metadata);
+      if (this.stringField(metadata, 'kind') === 'platform_subscription') {
+        const tenantId = this.stringField(metadata, 'tenantId');
+        if (!tenantId) {
+          throw new Error('Stripe platform checkout missing tenantId');
+        }
+        await this.completePlatformCheckout({
+          tenantId,
+          providerEventId,
+          session,
+          metadata,
+        });
+        return this.prisma.webhookEvent.update({
+          where: { id: eventId },
+          data: {
+            tenantId,
+            status: WebhookEventStatus.PROCESSED,
+            processedAt: new Date(),
+          },
+        });
+      }
+
+      const paymentId = this.stringField(metadata, 'paymentId');
+      const sessionId = this.stringField(session, 'id');
+      const payment = paymentId
+        ? await this.prisma.payment.findUnique({ where: { id: paymentId } })
+        : sessionId
+          ? await this.prisma.payment.findFirst({
+              where: {
+                provider: PaymentProvider.STRIPE,
+                providerSessionId: sessionId,
+              },
+            })
+          : null;
+
+      if (!payment) {
+        throw new Error('No matching payment found for Stripe event');
+      }
+
+      const completed = await this.completePayment({
+        tenantId: payment.tenantId,
+        paymentId: payment.id,
+        providerPaymentId:
+          this.stringField(session, 'payment_intent') ?? undefined,
+        receiptUrl: this.stringField(session, 'receipt_url') ?? null,
+      });
+
+      return this.prisma.webhookEvent.update({
+        where: { id: eventId },
+        data: {
+          tenantId: completed.tenantId,
+          status: WebhookEventStatus.PROCESSED,
+          processedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      return this.prisma.webhookEvent.update({
+        where: { id: eventId },
+        data: {
+          status: WebhookEventStatus.FAILED,
+          error:
+            error instanceof Error ? error.message : 'Stripe webhook error',
+          processedAt: new Date(),
+        },
+      });
+    }
+  }
+
+  private async reprocessPaystackWebhookEvent(
+    eventId: string,
+    payload: unknown,
+  ) {
+    const body = this.asRecord(payload);
+    const data = this.asRecord(body.data);
+    const metadata = this.asRecord(data.metadata);
+    const eventType = this.stringField(body, 'event') ?? 'paystack.event';
+    const reference =
+      this.stringField(data, 'reference') ?? `paystack-replay-${eventId}`;
+    const providerEventId = `${eventType}:${reference}`;
+
+    try {
+      const tenantId =
+        this.stringField(metadata, 'tenantId') ??
+        (await this.resolvePlatformTenantFromPaystackObject(data));
+      if (
+        tenantId &&
+        (eventType === 'charge.success' ||
+          eventType === 'subscription.create' ||
+          eventType === 'invoice.payment_success')
+      ) {
+        await this.completePaystackPlatformEvent({
+          tenantId,
+          providerEventId,
+          eventType,
+          data,
+          metadata,
+        });
+        return this.prisma.webhookEvent.update({
+          where: { id: eventId },
+          data: {
+            tenantId,
+            status: WebhookEventStatus.PROCESSED,
+            processedAt: new Date(),
+          },
+        });
+      }
+
+      const paymentId = this.stringField(metadata, 'paymentId');
+      const payment = paymentId
+        ? await this.prisma.payment.findUnique({ where: { id: paymentId } })
+        : await this.prisma.payment.findFirst({
+            where: {
+              provider: PaymentProvider.PAYSTACK,
+              providerSessionId: reference,
+            },
+          });
+      if (eventType === 'charge.success' && payment) {
+        const completed = await this.completePayment({
+          tenantId: payment.tenantId,
+          paymentId: payment.id,
+          providerPaymentId: reference,
+        });
+        return this.prisma.webhookEvent.update({
+          where: { id: eventId },
+          data: {
+            tenantId: completed.tenantId,
+            status: WebhookEventStatus.PROCESSED,
+            processedAt: new Date(),
+          },
+        });
+      }
+
+      return this.prisma.webhookEvent.update({
+        where: { id: eventId },
+        data: { status: WebhookEventStatus.IGNORED, processedAt: new Date() },
+      });
+    } catch (error) {
+      return this.prisma.webhookEvent.update({
+        where: { id: eventId },
+        data: {
+          status: WebhookEventStatus.FAILED,
+          error:
+            error instanceof Error ? error.message : 'Paystack webhook error',
+          processedAt: new Date(),
+        },
+      });
+    }
+  }
+
   async sendReceipt(user: AuthUser, paymentId: string, dto: SendReceiptDto) {
     assertManager(user);
     const payment = await this.prisma.payment.findFirst({

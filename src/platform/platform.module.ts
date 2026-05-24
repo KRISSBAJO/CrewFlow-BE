@@ -2,7 +2,11 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { AuditModule } from '../audit/audit.module';
+import { AutomationsModule } from '../automations/automations.module';
+import { PaymentsModule } from '../payments/payments.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { WebhooksModule } from '../webhooks/webhooks.module';
+import { WorkflowsModule } from '../workflows/workflows.module';
 import { PlatformController } from './platform.controller';
 import { PlatformService } from './platform.service';
 
@@ -19,6 +23,10 @@ import { PlatformService } from './platform.service';
         },
       }),
     }),
+    AutomationsModule,
+    PaymentsModule,
+    WebhooksModule,
+    WorkflowsModule,
   ],
   controllers: [PlatformController],
   providers: [PlatformService],

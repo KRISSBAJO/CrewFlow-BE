@@ -38,6 +38,21 @@ export class PlatformController {
     return this.platform.metrics();
   }
 
+  @Get('provider-health')
+  providerHealth() {
+    return this.platform.providerHealth();
+  }
+
+  @Post('billing/scan-trials')
+  scanTrialExpiry(@CurrentUser() user: AuthUser) {
+    return this.platform.scanTrialExpiry(user);
+  }
+
+  @Post('billing/scan-past-due')
+  scanPastDueBilling(@CurrentUser() user: AuthUser) {
+    return this.platform.scanPastDueBilling(user);
+  }
+
   @Get('risk')
   risk() {
     return this.platform.riskBoard();

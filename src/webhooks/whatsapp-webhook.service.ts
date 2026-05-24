@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   MessageDirection,
@@ -188,6 +192,44 @@ export class WhatsappWebhookService {
     });
 
     return { event, customer, message: log, processed: true };
+  }
+
+  async replay(eventId: string) {
+    const event = await this.prisma.webhookEvent.findUniqueOrThrow({
+      where: { id: eventId },
+      include: { tenant: true },
+    });
+    if (event.provider !== WebhookProvider.WHATSAPP) {
+      throw new BadRequestException('Webhook provider is not WhatsApp');
+    }
+
+    try {
+      const result = await this.receive(
+        event.payload as Record<string, unknown>,
+        event.tenant?.slug,
+      );
+      const status = result.processed
+        ? WebhookEventStatus.PROCESSED
+        : WebhookEventStatus.IGNORED;
+      return this.prisma.webhookEvent.update({
+        where: { id: event.id },
+        data: {
+          status,
+          error: null,
+          processedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      return this.prisma.webhookEvent.update({
+        where: { id: event.id },
+        data: {
+          status: WebhookEventStatus.FAILED,
+          error:
+            error instanceof Error ? error.message : 'WhatsApp replay error',
+          processedAt: new Date(),
+        },
+      });
+    }
   }
 
   private extractMessage(

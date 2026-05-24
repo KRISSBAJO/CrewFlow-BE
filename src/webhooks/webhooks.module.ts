@@ -9,5 +9,6 @@ import { WhatsappWebhookService } from './whatsapp-webhook.service';
   imports: [AuditModule, SecurityModule, MessagingModule],
   controllers: [WhatsappWebhookController],
   providers: [WhatsappWebhookService],
+  exports: [WhatsappWebhookService],
 })
 export class WebhooksModule {}

@@ -66,14 +66,21 @@ export class OperationsSchedulerService
   }
 
   async runTenantScans(tenantId: string, source = 'manual') {
-    const [overdue, lostRevenue, leadFollowUps, retention, billingRecovery] =
-      await Promise.all([
-        this.scanOverdueInvoices(tenantId, source),
-        this.scanLostRevenue(tenantId, source),
-        this.scanLeadFollowUps(tenantId, source),
-        this.retention.scanTenant(tenantId, source),
-        this.workflows.scanBillingRecoveryForTenant(tenantId, source),
-      ]);
+    const [
+      overdue,
+      lostRevenue,
+      leadFollowUps,
+      retention,
+      billingRecovery,
+      trialExpiry,
+    ] = await Promise.all([
+      this.scanOverdueInvoices(tenantId, source),
+      this.scanLostRevenue(tenantId, source),
+      this.scanLeadFollowUps(tenantId, source),
+      this.retention.scanTenant(tenantId, source),
+      this.workflows.scanBillingRecoveryForTenant(tenantId, source),
+      this.workflows.scanTrialExpiryForTenant(tenantId, source),
+    ]);
     return {
       tenantId,
       overdue,
@@ -81,6 +88,7 @@ export class OperationsSchedulerService
       leadFollowUps,
       retention,
       billingRecovery,
+      trialExpiry,
     };
   }
 
