@@ -6,13 +6,16 @@ import {
   AutomationTrigger,
   BookingStatus,
   InvoiceStatus,
+  MessageProvider,
   Prisma,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { AutomationsService } from '../automations/automations.service';
 import type { AuthUser } from '../common/current-user.decorator';
 import { assertManager } from '../common/permissions';
+import { MessagesService } from '../messages/messages.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { RevenueCampaignType, SendCampaignDto } from './dto/send-campaign.dto';
 
 @Injectable()
 export class RetentionService {
@@ -20,11 +23,58 @@ export class RetentionService {
     private readonly prisma: PrismaService,
     private readonly automations: AutomationsService,
     private readonly audit: AuditService,
+    private readonly messages: MessagesService,
   ) {}
 
   async summary(user: AuthUser) {
     assertManager(user);
     return this.buildSummary(user.tenantId);
+  }
+
+  async revenueEngine(user: AuthUser) {
+    assertManager(user);
+    const profiles = await this.customerRevenueProfiles(user.tenantId);
+    const enriched = profiles.map((profile) =>
+      this.enrichRevenueProfile(profile),
+    );
+    const segments = this.segmentCustomers(enriched);
+    const nextBestActions = enriched
+      .filter((profile) => profile.nextBestAction.type !== 'NONE')
+      .sort(
+        (a, b) =>
+          b.nextBestAction.priorityScore - a.nextBestAction.priorityScore ||
+          b.lifetimeValueCents - a.lifetimeValueCents,
+      )
+      .slice(0, 30);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      summary: {
+        customers: enriched.length,
+        lifetimeValueCents: enriched.reduce(
+          (sum, profile) => sum + profile.lifetimeValueCents,
+          0,
+        ),
+        openInvoiceCents: enriched.reduce(
+          (sum, profile) => sum + profile.openInvoiceCents,
+          0,
+        ),
+        repeatReadyCents: segments.repeatReady.reduce(
+          (sum, profile) => sum + profile.estimatedNextValueCents,
+          0,
+        ),
+        winBackCents: segments.inactive.reduce(
+          (sum, profile) => sum + profile.estimatedNextValueCents,
+          0,
+        ),
+        highValueCount: segments.highValue.length,
+        atRiskCount: enriched.filter((profile) => profile.riskScore >= 65)
+          .length,
+      },
+      segments,
+      nextBestActions,
+      customers: enriched,
+    };
   }
 
   async scan(user: AuthUser) {
@@ -44,6 +94,51 @@ export class RetentionService {
       },
     });
     return result;
+  }
+
+  async sendCampaign(user: AuthUser, dto: SendCampaignDto) {
+    assertManager(user);
+    const profiles = await this.customerRevenueProfiles(user.tenantId);
+    const selected = profiles
+      .filter((profile) => dto.customerIds.includes(profile.customer.id))
+      .slice(0, 50);
+
+    const provider = dto.provider ?? MessageProvider.WHATSAPP;
+    const sent: unknown[] = [];
+    for (const profile of selected) {
+      const message = await this.messages.send(user, {
+        customerId: profile.customer.id,
+        provider,
+        content: this.campaignMessage(dto.type, profile, dto.note),
+      });
+      sent.push({
+        customerId: profile.customer.id,
+        messageId: message.message.id,
+      });
+    }
+
+    await this.audit.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'RETENTION_CAMPAIGN_SENT',
+      entityType: 'Customer',
+      summary: `Sent ${dto.type} campaign to ${sent.length} customers`,
+      metadata: {
+        type: dto.type,
+        provider,
+        customerIds: selected.map((profile) => profile.customer.id),
+        sent,
+      } as Prisma.InputJsonValue,
+    });
+
+    return {
+      sentAt: new Date().toISOString(),
+      type: dto.type,
+      provider,
+      requested: dto.customerIds.length,
+      sent: sent.length,
+      items: sent,
+    };
   }
 
   async scanTenant(tenantId: string, source = 'scheduler', actorId?: string) {
@@ -261,6 +356,174 @@ export class RetentionService {
             : 'Offer repeat booking',
       };
     });
+  }
+
+  private enrichRevenueProfile(
+    profile: Awaited<
+      ReturnType<RetentionService['customerRevenueProfiles']>
+    >[number],
+  ) {
+    const segmentTags = this.segmentTags(profile);
+    const riskScore = this.customerRiskScore(profile);
+    return {
+      ...profile,
+      segmentTags,
+      riskScore,
+      nextBestAction: this.nextBestAction(profile, riskScore),
+    };
+  }
+
+  private segmentCustomers(
+    customers: Array<ReturnType<RetentionService['enrichRevenueProfile']>>,
+  ) {
+    return {
+      highValue: customers
+        .filter((customer) => customer.segmentTags.includes('high_value'))
+        .slice(0, 12),
+      overduePayers: customers
+        .filter((customer) => customer.segmentTags.includes('overdue_payer'))
+        .slice(0, 12),
+      inactive: customers
+        .filter((customer) => customer.segmentTags.includes('inactive'))
+        .slice(0, 12),
+      repeatReady: customers
+        .filter((customer) => customer.segmentTags.includes('repeat_ready'))
+        .slice(0, 12),
+      newCustomers: customers
+        .filter((customer) => customer.segmentTags.includes('new_customer'))
+        .slice(0, 12),
+    };
+  }
+
+  private segmentTags(
+    profile: Awaited<
+      ReturnType<RetentionService['customerRevenueProfiles']>
+    >[number],
+  ) {
+    const tags: string[] = [];
+    if (profile.lifetimeValueCents >= 50000 || profile.completedBookings >= 3) {
+      tags.push('high_value');
+    }
+    if (profile.openInvoiceCents > 0) tags.push('overdue_payer');
+    if (
+      profile.completedBookings >= 1 &&
+      profile.daysSinceLastBooking >= 60 &&
+      !profile.hasFutureBooking
+    ) {
+      tags.push('inactive');
+    }
+    if (
+      profile.completedBookings >= 1 &&
+      profile.daysSinceLastBooking >= 14 &&
+      profile.daysSinceLastBooking < 60 &&
+      !profile.hasFutureBooking
+    ) {
+      tags.push('repeat_ready');
+    }
+    if (profile.completedBookings === 0 && profile.paidTotalCents === 0) {
+      tags.push('new_customer');
+    }
+    return tags.length ? tags : ['active'];
+  }
+
+  private customerRiskScore(
+    profile: Awaited<
+      ReturnType<RetentionService['customerRevenueProfiles']>
+    >[number],
+  ) {
+    return Math.min(
+      100,
+      (profile.openInvoiceCents > 0 ? 35 : 0) +
+        (profile.daysSinceLastBooking >= 90
+          ? 35
+          : profile.daysSinceLastBooking >= 60
+            ? 25
+            : profile.daysSinceLastBooking >= 30
+              ? 12
+              : 0) +
+        (profile.completedBookings >= 2 && !profile.hasFutureBooking ? 15 : 0) +
+        (profile.lifetimeValueCents >= 50000 ? 15 : 0),
+    );
+  }
+
+  private nextBestAction(
+    profile: Awaited<
+      ReturnType<RetentionService['customerRevenueProfiles']>
+    >[number],
+    riskScore: number,
+  ) {
+    if (profile.openInvoiceCents > 0) {
+      return {
+        type: 'COLLECT_PAYMENT',
+        label: 'Recover open invoice',
+        message: `${profile.customer.name} has ${this.money(profile.openInvoiceCents)} open. Collect payment before offering more work.`,
+        priorityScore: riskScore + 25,
+      };
+    }
+    if (
+      profile.completedBookings >= 1 &&
+      profile.daysSinceLastBooking >= 60 &&
+      !profile.hasFutureBooking
+    ) {
+      return {
+        type: 'WIN_BACK',
+        label: 'Send win-back',
+        message: `Offer ${profile.customer.name} a simple return slot for ${profile.serviceTitle}.`,
+        priorityScore: riskScore + 15,
+      };
+    }
+    if (
+      profile.completedBookings >= 1 &&
+      profile.daysSinceLastBooking >= 14 &&
+      !profile.hasFutureBooking
+    ) {
+      return {
+        type: 'REBOOK',
+        label: 'Offer repeat booking',
+        message: `Suggest another ${profile.serviceTitle} while the timing is right.`,
+        priorityScore: riskScore + 10,
+      };
+    }
+    if (profile.lifetimeValueCents >= 50000) {
+      return {
+        type: 'VIP_CHECK_IN',
+        label: 'VIP check-in',
+        message: `Protect a high-value customer with a personal check-in.`,
+        priorityScore: 55,
+      };
+    }
+    return {
+      type: 'NONE',
+      label: 'No action',
+      message: 'Customer is healthy right now.',
+      priorityScore: 0,
+    };
+  }
+
+  private campaignMessage(
+    type: RevenueCampaignType,
+    profile: Awaited<
+      ReturnType<RetentionService['customerRevenueProfiles']>
+    >[number],
+    note?: string,
+  ) {
+    const base =
+      type === RevenueCampaignType.REBOOKING
+        ? `Hi ${profile.customer.name}, would you like us to reserve another ${profile.serviceTitle} appointment for you?`
+        : type === RevenueCampaignType.WIN_BACK
+          ? `Hi ${profile.customer.name}, it has been a while since your last ${profile.serviceTitle}. We would be happy to help again this week.`
+          : type === RevenueCampaignType.PAYMENT_RECOVERY
+            ? `Hi ${profile.customer.name}, a quick reminder that your account has an open balance of ${this.money(profile.openInvoiceCents)}.`
+            : `Hi ${profile.customer.name}, checking in to make sure everything is still running smoothly for you.`;
+
+    return [base, note].filter(Boolean).join(' ');
+  }
+
+  private money(cents: number) {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+    }).format(cents / 100);
   }
 
   private upsertAction(input: {
