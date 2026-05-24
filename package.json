@@ -13,6 +13,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "seed": "ts-node prisma/seed.ts",
+    "demo:reset": "ts-node scripts/reset-demo.ts && yarn seed",
     "smoke": "./scripts/smoke.sh",
     "start": "nest start",
     "start:dev": "nest start --watch",

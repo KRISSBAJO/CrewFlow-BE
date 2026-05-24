@@ -118,6 +118,16 @@ API_URL=https://your-api.example.com/api ./scripts/smoke.sh
 
 The smoke test checks health, production readiness posture, login, dashboard, booking creation, receptionist intake, WhatsApp readiness, billing, activation, leads, retention, actions, and platform admin metrics.
 
+## Demo Reset
+
+For clean demos and UAT:
+
+```bash
+yarn demo:reset
+```
+
+This deletes only the seeded demo tenants and reseeds a fresh workspace. See [UAT Checklist](docs/UAT_CHECKLIST.md).
+
 ## Production Readiness
 
 Use the readiness endpoint before and after deploys:
@@ -194,6 +204,7 @@ Read:
 
 - [Launch Checklist](docs/LAUNCH_CHECKLIST.md)
 - [Deployment Runbook](docs/DEPLOYMENT_RUNBOOK.md)
+- [UAT Checklist](docs/UAT_CHECKLIST.md)
 - [Demo Script](docs/DEMO_SCRIPT.md)
 
 Important:
