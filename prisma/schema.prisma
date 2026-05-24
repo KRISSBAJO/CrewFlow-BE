@@ -734,6 +734,7 @@ model PlatformSupportAccess {
   token     String    @unique
   expiresAt DateTime
   usedAt    DateTime?
+  revokedAt DateTime?
   createdAt DateTime  @default(now())
   tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   admin     User      @relation("PlatformSupportAccessAdmin", fields: [adminId], references: [id])

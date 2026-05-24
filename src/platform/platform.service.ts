@@ -46,6 +46,13 @@ type StripePortalSession = {
   url?: string;
 };
 
+type PlatformAuditFilters = {
+  tenantId?: string;
+  action?: string;
+  q?: string;
+  limit?: string;
+};
+
 @Injectable()
 export class PlatformService {
   constructor(
@@ -135,6 +142,153 @@ export class PlatformService {
       },
       orderBy: { createdAt: 'desc' },
       take: 200,
+    });
+  }
+
+  async riskBoard() {
+    const tenants = await this.prisma.tenant.findMany({
+      include: {
+        _count: {
+          select: {
+            users: true,
+            customers: true,
+            bookings: true,
+            invoices: true,
+            leads: true,
+            operationalActions: true,
+            automationRuns: true,
+            webhookEvents: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+    });
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 86_400_000);
+
+    const rows = await Promise.all(
+      tenants.map(async (tenant) => {
+        const [
+          failedAutomations,
+          failedWebhooks,
+          openActions,
+          overdueInvoices,
+          hotLeads,
+          recentBookings,
+          lastAudit,
+          activeSupportSessions,
+        ] = await Promise.all([
+          this.prisma.automationRun.count({
+            where: { tenantId: tenant.id, status: AutomationRunStatus.FAILED },
+          }),
+          this.prisma.webhookEvent.count({
+            where: { tenantId: tenant.id, status: WebhookEventStatus.FAILED },
+          }),
+          this.prisma.operationalAction.count({
+            where: {
+              tenantId: tenant.id,
+              status: { in: [ActionStatus.OPEN, ActionStatus.IN_PROGRESS] },
+            },
+          }),
+          this.prisma.invoice.count({
+            where: {
+              tenantId: tenant.id,
+              status: { in: [InvoiceStatus.SENT, InvoiceStatus.OVERDUE] },
+              dueDate: { lt: now },
+            },
+          }),
+          this.prisma.lead.count({
+            where: {
+              tenantId: tenant.id,
+              status: { in: [LeadStatus.BOOKING_READY, LeadStatus.QUALIFIED] },
+            },
+          }),
+          this.prisma.booking.count({
+            where: { tenantId: tenant.id, createdAt: { gte: thirtyDaysAgo } },
+          }),
+          this.prisma.auditLog.findFirst({
+            where: { tenantId: tenant.id },
+            orderBy: { createdAt: 'desc' },
+          }),
+          this.prisma.platformSupportAccess.count({
+            where: {
+              tenantId: tenant.id,
+              expiresAt: { gt: now },
+              revokedAt: null,
+            },
+          }),
+        ]);
+
+        let score = 100;
+        const reasons: string[] = [];
+        const subtract = (points: number, reason: string) => {
+          score -= points;
+          reasons.push(reason);
+        };
+        if (tenant.status === TenantStatus.SUSPENDED)
+          subtract(25, 'Suspended tenant');
+        if (tenant.status === TenantStatus.ARCHIVED)
+          subtract(40, 'Archived tenant');
+        if (tenant.status === TenantStatus.CHURNED)
+          subtract(60, 'Churned tenant');
+        if (
+          tenant.subscriptionStatus === SubscriptionStatus.PAST_DUE ||
+          tenant.subscriptionStatus === SubscriptionStatus.UNPAID
+        ) {
+          subtract(25, 'Past due billing');
+        }
+        if (failedAutomations)
+          subtract(
+            Math.min(20, failedAutomations * 4),
+            `${failedAutomations} failed automations`,
+          );
+        if (failedWebhooks)
+          subtract(
+            Math.min(20, failedWebhooks * 5),
+            `${failedWebhooks} failed webhooks`,
+          );
+        if (overdueInvoices)
+          subtract(
+            Math.min(20, overdueInvoices * 4),
+            `${overdueInvoices} overdue invoices`,
+          );
+        if (openActions > 5) subtract(10, 'Action queue piling up');
+        if (recentBookings === 0 && tenant.status === TenantStatus.ACTIVE)
+          subtract(10, 'No recent bookings');
+        if (activeSupportSessions)
+          reasons.push(`${activeSupportSessions} active support sessions`);
+        if (!reasons.length) reasons.push('Healthy');
+
+        return {
+          tenant,
+          score: Math.max(0, score),
+          severity:
+            score < 45 ? 'critical' : score < 70 ? 'warning' : 'healthy',
+          reasons,
+          failedAutomations,
+          failedWebhooks,
+          openActions,
+          overdueInvoices,
+          hotLeads,
+          recentBookings,
+          activeSupportSessions,
+          lastActivityAt: lastAudit?.createdAt ?? tenant.updatedAt,
+        };
+      }),
+    );
+
+    return rows.sort((a, b) => a.score - b.score);
+  }
+
+  supportSessions() {
+    return this.prisma.platformSupportAccess.findMany({
+      include: {
+        tenant: true,
+        admin: { select: { id: true, email: true, role: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 120,
     });
   }
 
@@ -1235,6 +1389,9 @@ export class PlatformService {
     if (access.expiresAt < new Date()) {
       throw new BadRequestException('Support token has expired');
     }
+    if (access.revokedAt) {
+      throw new BadRequestException('Support token has been revoked');
+    }
 
     const target = await this.prisma.user.findFirst({
       where: {
@@ -1295,6 +1452,42 @@ export class PlatformService {
         status: access.tenant.status,
       },
     };
+  }
+
+  async revokeSupportAccess(user: AuthUser, id: string) {
+    const access = await this.prisma.platformSupportAccess.findUniqueOrThrow({
+      where: { id },
+      include: { tenant: true, admin: true },
+    });
+    if (user.role !== UserRole.PLATFORM_ADMIN && access.adminId !== user.sub) {
+      throw new ForbiddenException(
+        'Only platform admins or the token owner can revoke support access',
+      );
+    }
+
+    const revoked = await this.prisma.platformSupportAccess.update({
+      where: { id },
+      data: { revokedAt: new Date() },
+      include: {
+        tenant: true,
+        admin: { select: { id: true, email: true, role: true } },
+      },
+    });
+
+    await this.auditService.record({
+      tenantId: access.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_SUPPORT_ACCESS_REVOKED',
+      entityType: 'PlatformSupportAccess',
+      entityId: id,
+      summary: `Support access revoked for ${access.tenant.businessName}`,
+      metadata: {
+        adminEmail: access.admin.email,
+        originallyExpiresAt: access.expiresAt,
+      },
+    });
+
+    return revoked;
   }
 
   automationFailures() {
@@ -1389,14 +1582,49 @@ export class PlatformService {
     return updated;
   }
 
-  auditLogs() {
+  exportHistory() {
     return this.prisma.auditLog.findMany({
+      where: { action: 'PLATFORM_TENANT_EXPORTED' },
       include: {
         tenant: true,
         actor: { select: { id: true, email: true, role: true } },
       },
       orderBy: { createdAt: 'desc' },
-      take: 200,
+      take: 100,
+    });
+  }
+
+  auditLogs(filters: PlatformAuditFilters = {}) {
+    const limit = Math.min(
+      500,
+      Math.max(1, Number.parseInt(filters.limit ?? '200', 10) || 200),
+    );
+    const contains = filters.q?.trim()
+      ? {
+          contains: filters.q.trim(),
+          mode: Prisma.QueryMode.insensitive,
+        }
+      : undefined;
+    return this.prisma.auditLog.findMany({
+      where: {
+        tenantId: filters.tenantId || undefined,
+        action: filters.action || undefined,
+        OR: contains
+          ? [
+              { action: contains },
+              { entityType: contains },
+              { summary: contains },
+              { actor: { email: contains } },
+              { tenant: { businessName: contains } },
+            ]
+          : undefined,
+      },
+      include: {
+        tenant: true,
+        actor: { select: { id: true, email: true, role: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
     });
   }
 

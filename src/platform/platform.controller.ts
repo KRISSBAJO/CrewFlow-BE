@@ -38,6 +38,16 @@ export class PlatformController {
     return this.platform.metrics();
   }
 
+  @Get('risk')
+  risk() {
+    return this.platform.riskBoard();
+  }
+
+  @Get('support-sessions')
+  supportSessions() {
+    return this.platform.supportSessions();
+  }
+
   @Get('tenants')
   tenants() {
     return this.platform.tenants();
@@ -173,6 +183,11 @@ export class PlatformController {
     return this.platform.impersonate(user, token);
   }
 
+  @Post('support-access/:id/revoke')
+  revokeSupportAccess(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.platform.revokeSupportAccess(user, id);
+  }
+
   @Get('tenants/:id/billing')
   billingSummary(@Param('id') id: string) {
     return this.platform.billingSummary(id);
@@ -248,8 +263,18 @@ export class PlatformController {
     return this.platform.replayWebhookFailure(user, id, dto);
   }
 
+  @Get('exports')
+  exports() {
+    return this.platform.exportHistory();
+  }
+
   @Get('audit')
-  audit() {
-    return this.platform.auditLogs();
+  audit(
+    @Query('tenantId') tenantId?: string,
+    @Query('action') action?: string,
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.platform.auditLogs({ tenantId, action, q, limit });
   }
 }
