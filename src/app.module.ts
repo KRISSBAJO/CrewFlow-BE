@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { AuditModule } from './audit/audit.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { AutomationsModule } from './automations/automations.module';
+import { BookingPortalModule } from './booking-portal/booking-portal.module';
 import { BookingsModule } from './bookings/bookings.module';
 import { RolesGuard } from './common/roles.guard';
 import { CustomersModule } from './customers/customers.module';
@@ -38,6 +39,7 @@ import { WorkflowsModule } from './workflows/workflows.module';
     AuthModule,
     AuditModule,
     TenantsModule,
+    BookingPortalModule,
     CustomersModule,
     ServicesModule,
     BookingsModule,
