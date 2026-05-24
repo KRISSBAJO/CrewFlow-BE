@@ -31,6 +31,11 @@ export class TenantsController {
     return this.tenants.getOnboarding(user.tenantId);
   }
 
+  @Get('whatsapp/onboarding')
+  whatsappOnboarding(@CurrentUser() user: AuthUser) {
+    return this.tenants.whatsappOnboarding(user.tenantId);
+  }
+
   @Get('activation')
   activation(@CurrentUser() user: AuthUser) {
     return this.tenants.activation(user);

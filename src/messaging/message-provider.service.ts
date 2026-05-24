@@ -6,6 +6,11 @@ export type SendMessageInput = {
   provider: MessageProvider;
   to: string;
   content: string;
+  whatsappTemplate?: {
+    name: string;
+    language: string;
+    parameters: string[];
+  };
 };
 
 export type SendMessageResult = {
@@ -52,6 +57,33 @@ export class MessageProviderService {
       return this.mock(input, 'missing_whatsapp_credentials');
     }
 
+    const body = input.whatsappTemplate
+      ? {
+          messaging_product: 'whatsapp',
+          to: input.to.replace(/^\+/, ''),
+          type: 'template',
+          template: {
+            name: input.whatsappTemplate.name,
+            language: { code: input.whatsappTemplate.language },
+            components: input.whatsappTemplate.parameters.length
+              ? [
+                  {
+                    type: 'body',
+                    parameters: input.whatsappTemplate.parameters.map(
+                      (text) => ({ type: 'text', text }),
+                    ),
+                  },
+                ]
+              : undefined,
+          },
+        }
+      : {
+          messaging_product: 'whatsapp',
+          to: input.to.replace(/^\+/, ''),
+          type: 'text',
+          text: { preview_url: false, body: input.content },
+        };
+
     const response = await fetch(
       `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
       {
@@ -60,12 +92,7 @@ export class MessageProviderService {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: input.to.replace(/^\+/, ''),
-          type: 'text',
-          text: { preview_url: false, body: input.content },
-        }),
+        body: JSON.stringify(body),
       },
     );
     const raw = (await response.json()) as Record<string, unknown>;
@@ -93,6 +120,7 @@ export class MessageProviderService {
         reason,
         to: input.to,
         content: input.content,
+        whatsappTemplate: input.whatsappTemplate,
       },
     };
   }

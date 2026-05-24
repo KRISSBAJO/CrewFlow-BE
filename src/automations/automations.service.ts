@@ -5,6 +5,7 @@ import {
   MessageDirection,
   MessageProvider,
   Prisma,
+  WhatsAppTemplateStatus,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { MessageProviderService } from '../messaging/message-provider.service';
@@ -45,12 +46,14 @@ export class AutomationsService {
         trigger: dto.trigger,
         provider: dto.provider ?? MessageProvider.WHATSAPP,
         template: dto.template,
+        whatsappTemplateId: dto.whatsappTemplateId,
         active: dto.active ?? true,
         delayMinutes: dto.delayMinutes ?? 0,
       },
       update: {
         provider: dto.provider,
         template: dto.template,
+        whatsappTemplateId: dto.whatsappTemplateId,
         active: dto.active,
         delayMinutes: dto.delayMinutes,
       },
@@ -68,6 +71,7 @@ export class AutomationsService {
         customer: true,
         booking: { include: { service: true, assignedStaff: true } },
         invoice: true,
+        rule: { include: { whatsappTemplate: true } },
       },
       orderBy: { createdAt: 'desc' },
       take: 200,
@@ -81,6 +85,7 @@ export class AutomationsService {
         trigger: context.trigger,
         active: true,
       },
+      include: { whatsappTemplate: true },
     });
 
     if (!rule) {
@@ -113,6 +118,7 @@ export class AutomationsService {
 
     const scheduledFor = new Date(Date.now() + rule.delayMinutes * 60_000);
     const content = this.templates.render(rule.template, data);
+    const whatsappTemplate = this.whatsappTemplatePayload(rule, data);
     const run = await this.prisma.automationRun.upsert({
       where: {
         tenantId_idempotencyKey: {
@@ -132,7 +138,10 @@ export class AutomationsService {
         bookingId: context.bookingId,
         invoiceId: context.invoiceId,
         idempotencyKey: this.idempotencyKey(context),
-        metadata: data,
+        metadata: {
+          ...data,
+          ...(whatsappTemplate ? { whatsappTemplate } : {}),
+        },
       },
       update: {},
     });
@@ -203,6 +212,7 @@ export class AutomationsService {
         provider: run.provider,
         to: run.customer.phone,
         content: run.content,
+        whatsappTemplate: this.metadataWhatsappTemplate(run.metadata),
       });
 
       const message = await this.prisma.messageLog.create({
@@ -323,6 +333,63 @@ export class AutomationsService {
       invoiceNo: invoice?.invoiceNo,
       dueDate: invoice?.dueDate,
       total: invoice ? (invoice.totalCents / 100).toFixed(2) : undefined,
+      paymentUrl: invoice?.paymentUrl,
+    };
+  }
+
+  private whatsappTemplatePayload(
+    rule: {
+      whatsappTemplate?: {
+        status: WhatsAppTemplateStatus;
+        name: string;
+        language: string;
+        variableKeys: string[];
+      } | null;
+    },
+    data: Record<string, unknown>,
+  ) {
+    const template = rule.whatsappTemplate;
+    if (!template || template.status !== WhatsAppTemplateStatus.APPROVED) {
+      return undefined;
+    }
+    return {
+      name: template.name,
+      language: template.language,
+      parameters: template.variableKeys.map((key) =>
+        this.templateParameter(data[key]),
+      ),
+    };
+  }
+
+  private templateParameter(value: unknown) {
+    if (value instanceof Date) return value.toLocaleString();
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    return '';
+  }
+
+  private metadataWhatsappTemplate(metadata: Prisma.JsonValue | null) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return undefined;
+    }
+    const template = (metadata as Record<string, unknown>).whatsappTemplate;
+    if (!template || typeof template !== 'object' || Array.isArray(template)) {
+      return undefined;
+    }
+    const data = template as Record<string, unknown>;
+    if (
+      typeof data.name !== 'string' ||
+      typeof data.language !== 'string' ||
+      !Array.isArray(data.parameters)
+    ) {
+      return undefined;
+    }
+    return {
+      name: data.name,
+      language: data.language,
+      parameters: data.parameters.map((value) => String(value)),
     };
   }
 

@@ -91,6 +91,20 @@ enum AutomationRunStatus {
   SKIPPED
 }
 
+enum WhatsAppTemplateStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  PAUSED
+}
+
+enum WhatsAppTemplateCategory {
+  UTILITY
+  MARKETING
+  AUTHENTICATION
+}
+
 enum WebhookProvider {
   WHATSAPP
   STRIPE
@@ -233,6 +247,7 @@ model Tenant {
   fieldJobReports      FieldJobReport[]
   messages             MessageLog[]
   automations          AutomationRule[]
+  whatsappTemplates    WhatsAppTemplate[]
   automationRuns       AutomationRun[]
   webhookEvents        WebhookEvent[]
   receptionistConfig   ReceptionistConfig?
@@ -524,15 +539,42 @@ model AutomationRule {
   trigger      AutomationTrigger
   provider     MessageProvider   @default(WHATSAPP)
   template     String
+  whatsappTemplateId String?
   active       Boolean           @default(true)
   delayMinutes Int               @default(0)
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappTemplate WhatsAppTemplate? @relation(fields: [whatsappTemplateId], references: [id], onDelete: SetNull)
   runs         AutomationRun[]
 
   @@unique([tenantId, trigger])
   @@index([tenantId, active])
+  @@index([tenantId, whatsappTemplateId])
+}
+
+model WhatsAppTemplate {
+  id            String                   @id @default(cuid())
+  tenantId      String
+  trigger       AutomationTrigger?
+  name          String
+  language      String                   @default("en_US")
+  category      WhatsAppTemplateCategory @default(UTILITY)
+  status        WhatsAppTemplateStatus   @default(DRAFT)
+  body          String
+  sampleValues  Json?
+  variableKeys  String[]                 @default([])
+  metaTemplateId String?
+  rejectionReason String?
+  active        Boolean                  @default(true)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  tenant        Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  automationRules AutomationRule[]
+
+  @@unique([tenantId, name, language])
+  @@index([tenantId, status])
+  @@index([tenantId, trigger])
 }
 
 model AutomationRun {

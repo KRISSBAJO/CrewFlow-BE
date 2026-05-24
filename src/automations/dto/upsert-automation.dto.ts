@@ -31,6 +31,11 @@ export class UpsertAutomationDto {
   @IsString()
   template: string;
 
+  @ApiPropertyOptional({ example: 'cmwhatsapptemplate123' })
+  @IsOptional()
+  @IsString()
+  whatsappTemplateId?: string;
+
   @ApiPropertyOptional({ example: true })
   @IsOptional()
   @IsBoolean()

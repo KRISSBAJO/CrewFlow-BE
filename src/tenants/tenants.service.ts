@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import {
   BillingEventType,
+  MessageDirection,
+  MessageProvider,
   Prisma,
   SubscriptionStatus,
   Tenant,
@@ -12,6 +14,7 @@ import {
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { AuditService } from '../audit/audit.service';
+import { WhatsappTemplatesService } from '../automations/whatsapp-templates.service';
 import { AuthUser } from '../common/current-user.decorator';
 import { PlanLimitsService } from '../common/plan-limits.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -25,6 +28,7 @@ export class TenantsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly planLimits: PlanLimitsService,
+    private readonly whatsappTemplates: WhatsappTemplatesService,
   ) {}
 
   getProfile(tenantId: string) {
@@ -85,6 +89,99 @@ export class TenantsService {
       },
       update: {},
     });
+  }
+
+  async whatsappOnboarding(tenantId: string) {
+    const [
+      profile,
+      templates,
+      automationRules,
+      webhookEvents,
+      inboundMessages,
+    ] = await Promise.all([
+      this.getOnboarding(tenantId),
+      this.whatsappTemplates.onboarding(tenantId),
+      this.prisma.automationRule.findMany({
+        where: { tenantId, provider: MessageProvider.WHATSAPP },
+        include: { whatsappTemplate: true },
+        orderBy: { trigger: 'asc' },
+      }),
+      this.prisma.webhookEvent.count({
+        where: { tenantId, provider: MessageProvider.WHATSAPP },
+      }),
+      this.prisma.messageLog.count({
+        where: {
+          tenantId,
+          provider: MessageProvider.WHATSAPP,
+          direction: MessageDirection.INBOUND,
+        },
+      }),
+    ]);
+    const approvedTemplates = templates.filter(
+      (template) => template.status === 'APPROVED',
+    ).length;
+    const linkedRules = automationRules.filter((rule) =>
+      Boolean(rule.whatsappTemplateId),
+    ).length;
+    const liveReady = Boolean(
+      process.env.WHATSAPP_ACCESS_TOKEN &&
+      process.env.WHATSAPP_PHONE_NUMBER_ID &&
+      process.env.WHATSAPP_VERIFY_TOKEN,
+    );
+    const steps = [
+      {
+        id: 'business_number',
+        label: 'Business WhatsApp number',
+        done: Boolean(profile.whatsappNumber),
+        detail: profile.whatsappNumber ?? 'Add the customer-facing number',
+      },
+      {
+        id: 'cloud_api',
+        label: 'Meta Cloud API credentials',
+        done: liveReady,
+        detail: liveReady ? 'Live sender configured' : 'Using mock sender',
+      },
+      {
+        id: 'templates_seeded',
+        label: 'Production templates drafted',
+        done: templates.length >= 4,
+        detail: `${templates.length} templates in catalog`,
+      },
+      {
+        id: 'templates_approved',
+        label: 'Meta template approval',
+        done: approvedTemplates >= 3,
+        detail: `${approvedTemplates} approved templates`,
+      },
+      {
+        id: 'templates_linked',
+        label: 'Templates linked to automations',
+        done: linkedRules >= 3,
+        detail: `${linkedRules} automation rules linked`,
+      },
+      {
+        id: 'webhook_verified',
+        label: 'Webhook receiving customer messages',
+        done: webhookEvents > 0 || inboundMessages > 0,
+        detail: `${webhookEvents} webhook events, ${inboundMessages} inbound messages`,
+      },
+    ];
+
+    return {
+      liveReady,
+      webhookUrl: `${process.env.PUBLIC_API_URL ?? 'http://localhost:3002/api'}/webhooks/whatsapp`,
+      verifyTokenConfigured: Boolean(process.env.WHATSAPP_VERIFY_TOKEN),
+      appSecretConfigured: Boolean(process.env.WHATSAPP_APP_SECRET),
+      businessAccountConfigured: Boolean(
+        process.env.WHATSAPP_BUSINESS_ACCOUNT_ID,
+      ),
+      templates,
+      automationRules,
+      steps,
+      score: Math.round(
+        (steps.filter((step) => step.done).length / steps.length) * 100,
+      ),
+    };
   }
 
   async activation(user: AuthUser) {

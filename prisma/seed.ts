@@ -14,6 +14,8 @@ import {
   MessageProvider,
   PrismaClient,
   UserRole,
+  WhatsAppTemplateCategory,
+  WhatsAppTemplateStatus,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
@@ -658,47 +660,91 @@ async function main() {
   const automationRules = [
     {
       trigger: AutomationTrigger.BOOKING_CONFIRMED,
+      name: 'crewflow_booking_confirmed',
       template:
         'Hi {{customerName}}, your {{service}} appointment with {{businessName}} is confirmed for {{startTime}}.',
+      variableKeys: ['customerName', 'service', 'businessName', 'startTime'],
     },
     {
       trigger: AutomationTrigger.STAFF_ON_THE_WAY,
+      name: 'crewflow_staff_on_the_way',
       template:
         '{{staffName}} from {{businessName}} is on the way. Reply here if anything changed.',
+      variableKeys: ['staffName', 'businessName'],
     },
     {
       trigger: AutomationTrigger.MISSED_APPOINTMENT,
+      name: 'crewflow_missed_appointment',
       template:
         'Hi {{customerName}}, we missed you for your {{service}} appointment. Reply here and we can help reschedule.',
+      variableKeys: ['customerName', 'service'],
     },
     {
       trigger: AutomationTrigger.INVOICE_DUE,
+      name: 'crewflow_invoice_due',
       template:
         'Friendly reminder from {{businessName}}: invoice {{invoiceNo}} for ${{total}} is due on {{dueDate}}.',
+      variableKeys: ['businessName', 'invoiceNo', 'total', 'dueDate'],
     },
     {
       trigger: AutomationTrigger.REVIEW_REQUEST,
+      name: 'crewflow_review_request',
       template:
         'Thanks for choosing {{businessName}}, {{customerName}}. Could you leave a quick review?',
+      variableKeys: ['businessName', 'customerName'],
     },
     {
       trigger: AutomationTrigger.LEAD_FOLLOW_UP,
+      name: 'crewflow_lead_follow_up',
       template:
         'Hi {{customerName}}, this is {{businessName}} following up on {{leadTitle}}. Would you like us to help get this scheduled?',
+      variableKeys: ['customerName', 'businessName', 'leadTitle'],
     },
     {
       trigger: AutomationTrigger.REBOOKING_REMINDER,
+      name: 'crewflow_rebooking_reminder',
       template:
         'Hi {{customerName}}, it may be a good time to schedule your next service with {{businessName}}. Reply here and we can find a convenient slot.',
+      variableKeys: ['customerName', 'businessName'],
     },
     {
       trigger: AutomationTrigger.CUSTOMER_WINBACK,
+      name: 'crewflow_customer_winback',
       template:
         'Hi {{customerName}}, we have not seen you in a while. {{businessName}} would love to help with your next service when you are ready.',
+      variableKeys: ['customerName', 'businessName'],
     },
   ];
 
   for (const rule of automationRules) {
+    const whatsappTemplate = await prisma.whatsAppTemplate.upsert({
+      where: {
+        tenantId_name_language: {
+          tenantId: tenant.id,
+          name: rule.name,
+          language: 'en_US',
+        },
+      },
+      create: {
+        tenantId: tenant.id,
+        trigger: rule.trigger,
+        name: rule.name,
+        language: 'en_US',
+        category: WhatsAppTemplateCategory.UTILITY,
+        status: WhatsAppTemplateStatus.APPROVED,
+        body: rule.template,
+        variableKeys: rule.variableKeys,
+        sampleValues: Object.fromEntries(
+          rule.variableKeys.map((key) => [key, key]),
+        ),
+      },
+      update: {
+        trigger: rule.trigger,
+        body: rule.template,
+        variableKeys: rule.variableKeys,
+        active: true,
+      },
+    });
     await prisma.automationRule.upsert({
       where: {
         tenantId_trigger: { tenantId: tenant.id, trigger: rule.trigger },
@@ -707,9 +753,11 @@ async function main() {
         tenantId: tenant.id,
         trigger: rule.trigger,
         template: rule.template,
+        whatsappTemplateId: whatsappTemplate.id,
       },
       update: {
         template: rule.template,
+        whatsappTemplateId: whatsappTemplate.id,
         active: true,
       },
     });
