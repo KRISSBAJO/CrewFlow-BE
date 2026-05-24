@@ -7,8 +7,11 @@ import { Public } from '../common/public.decorator';
 import { Roles } from '../common/roles.decorator';
 import { CreateBillingEventDto } from './dto/create-billing-event.dto';
 import { CreatePlatformCheckoutDto } from './dto/create-platform-checkout.dto';
+import { CreatePlatformTenantDto } from './dto/create-platform-tenant.dto';
+import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateSupportNoteDto } from './dto/create-support-note.dto';
+import { UpdateActionDto } from '../workflows/dto/update-action.dto';
 import { UpdatePlatformUserDto } from './dto/update-platform-user.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
 import { PlatformService } from './platform.service';
@@ -30,9 +33,25 @@ export class PlatformController {
     return this.platform.tenants();
   }
 
+  @Post('tenants')
+  createTenant(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreatePlatformTenantDto,
+  ) {
+    return this.platform.createTenant(user, dto);
+  }
+
   @Get('users')
   users() {
     return this.platform.users();
+  }
+
+  @Post('users')
+  createUser(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreatePlatformUserDto,
+  ) {
+    return this.platform.createUser(user, dto);
   }
 
   @Patch('users/:id')
@@ -47,6 +66,15 @@ export class PlatformController {
   @Get('actions')
   actions() {
     return this.platform.actions();
+  }
+
+  @Patch('actions/:id')
+  updateAction(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateActionDto,
+  ) {
+    return this.platform.updateAction(user, id, dto);
   }
 
   @Get('tenants/:id')

@@ -9,8 +9,10 @@ import {
   SubscriptionStatus,
   Tenant,
   TenantStatus,
+  UserRole,
   WebhookEventStatus,
 } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../common/current-user.decorator';
@@ -18,9 +20,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateBillingEventDto } from './dto/create-billing-event.dto';
 import { CreatePlatformCheckoutDto } from './dto/create-platform-checkout.dto';
+import { CreatePlatformTenantDto } from './dto/create-platform-tenant.dto';
+import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 import { CreateSupportNoteDto } from './dto/create-support-note.dto';
 import { UpdatePlatformUserDto } from './dto/update-platform-user.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
+import { UpdateActionDto } from '../workflows/dto/update-action.dto';
 
 type StripeCheckoutSession = {
   id: string;
@@ -125,6 +130,71 @@ export class PlatformService {
     });
   }
 
+  async createTenant(user: AuthUser, dto: CreatePlatformTenantDto) {
+    const slug = await this.uniqueTenantSlug(dto.slug ?? dto.businessName);
+    const passwordHash = await bcrypt.hash(dto.ownerPassword, 12);
+    const tenant = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.tenant.create({
+        data: {
+          businessName: dto.businessName.trim(),
+          slug,
+          industry: dto.industry.trim(),
+          status: dto.status ?? TenantStatus.TRIAL,
+          subscriptionStatus:
+            dto.subscriptionStatus ?? SubscriptionStatus.TRIALING,
+          subscriptionPlan: dto.subscriptionPlan?.trim() || 'pilot',
+          billingEmail: dto.ownerEmail.toLowerCase().trim(),
+          monthlyPriceCents: dto.monthlyPriceCents ?? 29900,
+          setupFeeCents: dto.setupFeeCents ?? 100000,
+          featureFlags: dto.featureFlags ?? {
+            aiReceptionist: true,
+            leadPipeline: true,
+            retention: true,
+            whatsappAutomation: true,
+          },
+          planLimits: dto.planLimits ?? {
+            staff: 10,
+            monthlyBookings: 200,
+            monthlyMessages: 2000,
+          },
+          onboardingProfile: {
+            create: {
+              ownerName: dto.ownerName.trim(),
+              ownerEmail: dto.ownerEmail.toLowerCase().trim(),
+              ownerPhone: dto.ownerPhone?.trim(),
+              services: [],
+              biggestProblem: 'Platform-created tenant',
+              setupStatus: 'NEEDS_SETUP',
+            },
+          },
+        },
+      });
+      await tx.user.create({
+        data: {
+          tenantId: created.id,
+          name: dto.ownerName.trim(),
+          email: dto.ownerEmail.toLowerCase().trim(),
+          passwordHash,
+          phone: dto.ownerPhone?.trim(),
+          role: UserRole.OWNER,
+        },
+      });
+      return created;
+    });
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_TENANT_CREATED',
+      entityType: 'Tenant',
+      entityId: tenant.id,
+      summary: `Platform admin created ${tenant.businessName}`,
+      metadata: { slug: tenant.slug, ownerEmail: dto.ownerEmail },
+    });
+
+    return this.tenant(tenant.id);
+  }
+
   users() {
     return this.prisma.user.findMany({
       select: {
@@ -150,6 +220,53 @@ export class PlatformService {
       orderBy: { createdAt: 'desc' },
       take: 300,
     });
+  }
+
+  async createUser(user: AuthUser, dto: CreatePlatformUserDto) {
+    await this.prisma.tenant.findUniqueOrThrow({ where: { id: dto.tenantId } });
+    const passwordHash = await bcrypt.hash(dto.password, 12);
+    const created = await this.prisma.user.create({
+      data: {
+        tenantId: dto.tenantId,
+        name: dto.name.trim(),
+        email: dto.email.toLowerCase().trim(),
+        passwordHash,
+        phone: dto.phone?.trim(),
+        role: dto.role,
+      },
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+        email: true,
+        role: true,
+        phone: true,
+        active: true,
+        createdAt: true,
+        updatedAt: true,
+        tenant: {
+          select: {
+            id: true,
+            businessName: true,
+            slug: true,
+            status: true,
+            subscriptionStatus: true,
+          },
+        },
+      },
+    });
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_USER_CREATED',
+      entityType: 'User',
+      entityId: created.id,
+      summary: `Platform admin created ${created.email}`,
+      metadata: { targetTenantId: dto.tenantId, role: dto.role },
+    });
+
+    return created;
   }
 
   async updateUser(user: AuthUser, id: string, dto: UpdatePlatformUserDto) {
@@ -214,11 +331,67 @@ export class PlatformService {
         customer: true,
         booking: { include: { service: true } },
         invoice: true,
-        assignedTo: { select: { id: true, name: true, email: true, role: true } },
+        assignedTo: {
+          select: { id: true, name: true, email: true, role: true },
+        },
       },
       orderBy: [{ priority: 'desc' }, { dueAt: 'asc' }, { createdAt: 'desc' }],
       take: 200,
     });
+  }
+
+  async updateAction(user: AuthUser, id: string, dto: UpdateActionDto) {
+    const existing = await this.prisma.operationalAction.findUniqueOrThrow({
+      where: { id },
+    });
+    if (dto.assignedToId) {
+      await this.prisma.user.findFirstOrThrow({
+        where: { id: dto.assignedToId, tenantId: existing.tenantId },
+      });
+    }
+    const action = await this.prisma.operationalAction.update({
+      where: { id },
+      data: {
+        status: dto.status,
+        priority: dto.priority,
+        assignedToId: dto.assignedToId,
+        dueAt: dto.dueAt ? new Date(dto.dueAt) : undefined,
+        completedAt:
+          dto.status === ActionStatus.COMPLETED ? new Date() : undefined,
+        dismissedAt:
+          dto.status === ActionStatus.DISMISSED ? new Date() : undefined,
+        metadata: {
+          ...(existing.metadata as Record<string, unknown> | null),
+          platformNote: dto.note,
+          platformUpdatedBy: user.sub,
+        },
+      },
+      include: {
+        tenant: true,
+        customer: true,
+        booking: { include: { service: true } },
+        invoice: true,
+        assignedTo: {
+          select: { id: true, name: true, email: true, role: true },
+        },
+      },
+    });
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_ACTION_UPDATED',
+      entityType: 'OperationalAction',
+      entityId: id,
+      summary: `Platform admin updated action: ${action.title}`,
+      metadata: {
+        targetTenantId: action.tenantId,
+        status: action.status,
+        priority: action.priority,
+      },
+    });
+
+    return action;
   }
 
   tenant(id: string) {
@@ -780,6 +953,22 @@ export class PlatformService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
+  }
+
+  private async uniqueTenantSlug(input: string) {
+    const base =
+      input
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '') || 'tenant';
+    let slug = base;
+    let suffix = 1;
+    while (await this.prisma.tenant.findUnique({ where: { slug } })) {
+      suffix += 1;
+      slug = `${base}-${suffix}`;
+    }
+    return slug;
   }
 
   private async createStripeSubscriptionCheckout(input: {
