@@ -28,6 +28,8 @@ Recommended:
 - [ ] `RATE_LIMIT_ENABLED=true`
 - [ ] `RATE_LIMIT_WINDOW_MS`
 - [ ] `RATE_LIMIT_MAX`
+- [ ] `TRUST_PROXY=true` when behind a proxy/load balancer
+- [ ] `SWAGGER_ENABLED=false` unless docs are intentionally public
 - [ ] `ENABLE_SCHEDULER=true`
 - [ ] `SCHEDULER_INTERVAL_MS`
 
@@ -52,10 +54,12 @@ Payments:
 - [ ] `PAYMENT_SUCCESS_URL`
 - [ ] `PAYMENT_CANCEL_URL`
 - [ ] Stripe webhook URL points to `/api/webhooks/stripe`
+- [ ] Paystack webhook URL points to `/api/webhooks/paystack`
+- [ ] Payment success/cancel URLs point to the deployed frontend
 
 ## Deployment Notes
 
-- Run migrations before serving traffic: `yarn prisma:migrate` or your platform migration command.
+- Run migrations before serving traffic: `yarn prisma:deploy` or your platform migration command.
 - Serve the compiled backend with `yarn start:prod`.
 - Do not run demo seed against a production customer database.
 - Demo seed is blocked in `NODE_ENV=production` unless `ALLOW_DEMO_SEED=true`.

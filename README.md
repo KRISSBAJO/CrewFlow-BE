@@ -193,6 +193,7 @@ It returns database status, sanitized integration readiness, scheduler status, p
 Read:
 
 - [Launch Checklist](docs/LAUNCH_CHECKLIST.md)
+- [Deployment Runbook](docs/DEPLOYMENT_RUNBOOK.md)
 - [Demo Script](docs/DEMO_SCRIPT.md)
 
 Important:
@@ -202,6 +203,9 @@ Important:
 - Use a long random `JWT_SECRET`.
 - Set `CORS_ORIGIN` to your deployed frontend origin.
 - Set `PUBLIC_API_URL` to the public HTTPS API URL.
+- Use `yarn prisma:deploy` for production migrations.
+- Set `TRUST_PROXY=true` behind a platform proxy/load balancer.
+- Set `SWAGGER_ENABLED=false` unless public API docs are intentional.
 - Set `WHATSAPP_APP_SECRET` so WhatsApp webhook signatures are enforced.
 - Set `STRIPE_WEBHOOK_SECRET` so Stripe webhook signatures are enforced.
 - Turn on the scheduler only when you want automated operational scans.

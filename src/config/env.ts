@@ -8,6 +8,8 @@ const recommendedProduction = [
   'RATE_LIMIT_ENABLED',
   'RATE_LIMIT_WINDOW_MS',
   'RATE_LIMIT_MAX',
+  'TRUST_PROXY',
+  'SWAGGER_ENABLED',
 ];
 
 function parseOrigins(value: string) {
@@ -109,6 +111,15 @@ export function validateEnv() {
       );
     }
 
+    if (
+      (process.env.STRIPE_SECRET_KEY || process.env.PAYSTACK_SECRET_KEY) &&
+      (!process.env.PAYMENT_SUCCESS_URL || !process.env.PAYMENT_CANCEL_URL)
+    ) {
+      throw new Error(
+        'PAYMENT_SUCCESS_URL and PAYMENT_CANCEL_URL are required when payment providers are enabled in production',
+      );
+    }
+
     const whatsappValues = [
       process.env.WHATSAPP_ACCESS_TOKEN,
       process.env.WHATSAPP_PHONE_NUMBER_ID,
@@ -119,6 +130,12 @@ export function validateEnv() {
     if (hasPartialWhatsApp) {
       throw new Error(
         'WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, and WHATSAPP_VERIFY_TOKEN must be configured together',
+      );
+    }
+
+    if (process.env.WHATSAPP_ACCESS_TOKEN && !process.env.WHATSAPP_APP_SECRET) {
+      throw new Error(
+        'WHATSAPP_APP_SECRET is required when WhatsApp is enabled in production',
       );
     }
 

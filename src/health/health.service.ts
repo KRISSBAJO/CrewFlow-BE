@@ -94,6 +94,8 @@ export class HealthService {
           rateLimitEnabled:
             (process.env.RATE_LIMIT_ENABLED ?? '').toLowerCase() === 'true',
           jwtConfigured: Boolean(process.env.JWT_SECRET),
+          trustProxy: process.env.TRUST_PROXY === 'true',
+          swaggerEnabled: process.env.SWAGGER_ENABLED !== 'false',
         },
         integrations: {
           stripe: {
