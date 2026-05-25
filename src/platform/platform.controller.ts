@@ -21,9 +21,11 @@ import { CreatePlatformUserDto } from './dto/create-platform-user.dto';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateSupportNoteDto } from './dto/create-support-note.dto';
 import { ReplayPlatformFailureDto } from './dto/replay-platform-failure.dto';
+import { ApplySubscriptionPlanDto } from './dto/apply-subscription-plan.dto';
 import { UpdateActionDto } from '../workflows/dto/update-action.dto';
 import { UpdatePlatformUserDto } from './dto/update-platform-user.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
+import { UpsertSubscriptionPlanDto } from './dto/upsert-subscription-plan.dto';
 import { PlatformService } from './platform.service';
 
 @ApiTags('platform')
@@ -66,6 +68,28 @@ export class PlatformController {
   @Get('tenants')
   tenants() {
     return this.platform.tenants();
+  }
+
+  @Get('plans')
+  plans() {
+    return this.platform.plans();
+  }
+
+  @Post('plans')
+  createPlan(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpsertSubscriptionPlanDto,
+  ) {
+    return this.platform.createPlan(user, dto);
+  }
+
+  @Patch('plans/:id')
+  updatePlan(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: UpsertSubscriptionPlanDto,
+  ) {
+    return this.platform.updatePlan(user, id, dto);
   }
 
   @Post('tenants')
@@ -139,6 +163,15 @@ export class PlatformController {
     @Body() dto: UpdateTenantStatusDto,
   ) {
     return this.platform.updateTenant(user, id, dto);
+  }
+
+  @Post('tenants/:id/apply-plan')
+  applyPlan(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: ApplySubscriptionPlanDto,
+  ) {
+    return this.platform.applyPlan(user, id, dto);
   }
 
   @Post('tenants/:id/archive')

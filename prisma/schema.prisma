@@ -217,6 +217,7 @@ model Tenant {
   status               TenantStatus            @default(TRIAL)
   subscriptionStatus   SubscriptionStatus      @default(TRIALING)
   subscriptionPlan     String                  @default("pilot")
+  subscriptionPlanId   String?
   logoUrl              String?
   coverImageUrl        String?
   brandColor           String?
@@ -263,6 +264,28 @@ model Tenant {
   supportAccessLogs    PlatformSupportAccess[]
   billingEvents        PlatformBillingEvent[]
   onboardingProfile    OnboardingProfile?
+  plan                 SubscriptionPlan?       @relation(fields: [subscriptionPlanId], references: [id])
+
+  @@index([subscriptionPlanId])
+}
+
+model SubscriptionPlan {
+  id                 String   @id @default(cuid())
+  name               String
+  slug               String   @unique
+  description        String?
+  active             Boolean  @default(true)
+  currency           String   @default("USD")
+  monthlyPriceCents  Int      @default(0)
+  setupFeeCents      Int      @default(0)
+  stripePriceId      String?
+  paystackPlanCode   String?
+  featureFlags       Json?
+  planLimits         Json?
+  sortOrder          Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  tenants            Tenant[]
 }
 
 model OnboardingProfile {

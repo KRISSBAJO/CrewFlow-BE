@@ -61,6 +61,11 @@ export class CreatePlatformTenantDto {
   @IsString()
   subscriptionPlan?: string;
 
+  @ApiPropertyOptional({ example: 'plan_growth' })
+  @IsOptional()
+  @IsString()
+  subscriptionPlanId?: string;
+
   @ApiPropertyOptional({ example: 29900 })
   @IsOptional()
   @IsInt()

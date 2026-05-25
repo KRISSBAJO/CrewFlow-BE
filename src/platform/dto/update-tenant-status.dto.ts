@@ -29,6 +29,11 @@ export class UpdateTenantStatusDto {
   @IsString()
   subscriptionPlan?: string;
 
+  @ApiPropertyOptional({ example: 'plan_growth' })
+  @IsOptional()
+  @IsString()
+  subscriptionPlanId?: string;
+
   @ApiPropertyOptional({ example: 'billing@example.com' })
   @IsOptional()
   @IsString()

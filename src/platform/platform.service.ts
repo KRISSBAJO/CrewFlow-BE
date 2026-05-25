@@ -28,6 +28,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WhatsappWebhookService } from '../webhooks/whatsapp-webhook.service';
 import { WorkflowsService } from '../workflows/workflows.service';
 import { ArchiveTenantDto } from './dto/archive-tenant.dto';
+import { ApplySubscriptionPlanDto } from './dto/apply-subscription-plan.dto';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { CreateBillingEventDto } from './dto/create-billing-event.dto';
 import { CreatePlatformCheckoutDto } from './dto/create-platform-checkout.dto';
@@ -37,6 +38,7 @@ import { CreateSupportNoteDto } from './dto/create-support-note.dto';
 import { ReplayPlatformFailureDto } from './dto/replay-platform-failure.dto';
 import { UpdatePlatformUserDto } from './dto/update-platform-user.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
+import { UpsertSubscriptionPlanDto } from './dto/upsert-subscription-plan.dto';
 import { UpdateActionDto } from '../workflows/dto/update-action.dto';
 
 type StripeCheckoutSession = {
@@ -305,6 +307,7 @@ export class PlatformService {
   tenants() {
     return this.prisma.tenant.findMany({
       include: {
+        plan: true,
         _count: {
           select: {
             users: true,
@@ -319,6 +322,63 @@ export class PlatformService {
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
+  }
+
+  plans() {
+    return this.prisma.subscriptionPlan.findMany({
+      include: { _count: { select: { tenants: true } } },
+      orderBy: [{ sortOrder: 'asc' }, { monthlyPriceCents: 'asc' }],
+    });
+  }
+
+  async createPlan(user: AuthUser, dto: UpsertSubscriptionPlanDto) {
+    this.assertSuperAdmin(user, 'create subscription plans');
+    if (!dto.name?.trim()) throw new BadRequestException('Plan name is required');
+    const slug = await this.uniquePlanSlug(dto.slug ?? dto.name);
+    const plan = await this.prisma.subscriptionPlan.create({
+      data: this.planData(
+        dto,
+        slug,
+      ) as Prisma.SubscriptionPlanUncheckedCreateInput,
+      include: { _count: { select: { tenants: true } } },
+    });
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_PLAN_CREATED',
+      entityType: 'SubscriptionPlan',
+      entityId: plan.id,
+      summary: `Platform admin created plan ${plan.name}`,
+      metadata: { slug: plan.slug, monthlyPriceCents: plan.monthlyPriceCents },
+    });
+    return plan;
+  }
+
+  async updatePlan(
+    user: AuthUser,
+    id: string,
+    dto: UpsertSubscriptionPlanDto,
+  ) {
+    this.assertSuperAdmin(user, 'update subscription plans');
+    const slug = dto.slug ? await this.uniquePlanSlug(dto.slug, id) : undefined;
+    const plan = await this.prisma.subscriptionPlan.update({
+      where: { id },
+      data: this.planData(
+        dto,
+        slug,
+      ) as Prisma.SubscriptionPlanUncheckedUpdateInput,
+      include: { _count: { select: { tenants: true } } },
+    });
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_PLAN_UPDATED',
+      entityType: 'SubscriptionPlan',
+      entityId: plan.id,
+      summary: `Platform admin updated plan ${plan.name}`,
+      metadata: { slug: plan.slug, active: plan.active },
+    });
+    return plan;
   }
 
   async riskBoard() {
@@ -471,6 +531,11 @@ export class PlatformService {
   async createTenant(user: AuthUser, dto: CreatePlatformTenantDto) {
     this.assertSuperAdmin(user, 'create tenants');
     const slug = await this.uniqueTenantSlug(dto.slug ?? dto.businessName);
+    const plan = dto.subscriptionPlanId
+      ? await this.prisma.subscriptionPlan.findUniqueOrThrow({
+          where: { id: dto.subscriptionPlanId },
+        })
+      : null;
     const passwordHash = await bcrypt.hash(dto.ownerPassword, 12);
     const tenant = await this.prisma.$transaction(async (tx) => {
       const created = await tx.tenant.create({
@@ -481,17 +546,20 @@ export class PlatformService {
           status: dto.status ?? TenantStatus.TRIAL,
           subscriptionStatus:
             dto.subscriptionStatus ?? SubscriptionStatus.TRIALING,
-          subscriptionPlan: dto.subscriptionPlan?.trim() || 'pilot',
+          subscriptionPlan:
+            plan?.slug ?? dto.subscriptionPlan?.trim() ?? 'pilot',
+          subscriptionPlanId: plan?.id,
           billingEmail: dto.ownerEmail.toLowerCase().trim(),
-          monthlyPriceCents: dto.monthlyPriceCents ?? 29900,
-          setupFeeCents: dto.setupFeeCents ?? 100000,
-          featureFlags: dto.featureFlags ?? {
+          monthlyPriceCents:
+            dto.monthlyPriceCents ?? plan?.monthlyPriceCents ?? 29900,
+          setupFeeCents: dto.setupFeeCents ?? plan?.setupFeeCents ?? 100000,
+          featureFlags: dto.featureFlags ?? plan?.featureFlags ?? {
             aiReceptionist: true,
             leadPipeline: true,
             retention: true,
             whatsappAutomation: true,
           },
-          planLimits: dto.planLimits ?? {
+          planLimits: dto.planLimits ?? plan?.planLimits ?? {
             staff: 10,
             monthlyBookings: 200,
             monthlyMessages: 2000,
@@ -739,6 +807,7 @@ export class PlatformService {
     return this.prisma.tenant.findUniqueOrThrow({
       where: { id },
       include: {
+        plan: true,
         users: {
           select: {
             id: true,
@@ -772,6 +841,7 @@ export class PlatformService {
       (dto.status ||
         dto.subscriptionStatus ||
         dto.subscriptionPlan ||
+        dto.subscriptionPlanId ||
         dto.monthlyPriceCents !== undefined ||
         dto.setupFeeCents !== undefined ||
         dto.stripeCustomerId ||
@@ -788,6 +858,7 @@ export class PlatformService {
       data: {
         status: dto.status,
         subscriptionPlan: dto.subscriptionPlan,
+        subscriptionPlanId: dto.subscriptionPlanId,
         billingEmail: dto.billingEmail,
         monthlyPriceCents: dto.monthlyPriceCents,
         setupFeeCents: dto.setupFeeCents,
@@ -832,6 +903,7 @@ export class PlatformService {
       metadata: {
         status: dto.status,
         subscriptionPlan: dto.subscriptionPlan,
+        subscriptionPlanId: dto.subscriptionPlanId,
         billingEmail: dto.billingEmail,
         monthlyPriceCents: dto.monthlyPriceCents,
         setupFeeCents: dto.setupFeeCents,
@@ -849,6 +921,53 @@ export class PlatformService {
     });
 
     return tenant;
+  }
+
+  async applyPlan(
+    user: AuthUser,
+    id: string,
+    dto: ApplySubscriptionPlanDto,
+  ) {
+    this.assertSuperAdmin(user, 'apply subscription plans');
+    const plan = await this.prisma.subscriptionPlan.findUniqueOrThrow({
+      where: { id: dto.planId },
+    });
+    const overwriteBilling = dto.overwriteBilling ?? true;
+    const overwriteFeatures = dto.overwriteFeatures ?? true;
+    const tenant = await this.prisma.tenant.update({
+      where: { id },
+      data: {
+        subscriptionPlanId: plan.id,
+        subscriptionPlan: plan.slug,
+        ...(overwriteBilling
+          ? {
+              monthlyPriceCents: plan.monthlyPriceCents,
+              setupFeeCents: plan.setupFeeCents,
+            }
+          : {}),
+        ...(overwriteFeatures
+          ? {
+              featureFlags: plan.featureFlags as Prisma.InputJsonValue,
+              planLimits: plan.planLimits as Prisma.InputJsonValue,
+            }
+          : {}),
+      },
+    });
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_PLAN_APPLIED',
+      entityType: 'Tenant',
+      entityId: id,
+      summary: `Platform admin applied ${plan.name} to ${tenant.businessName}`,
+      metadata: {
+        planId: plan.id,
+        planSlug: plan.slug,
+        overwriteBilling,
+        overwriteFeatures,
+      },
+    });
+    return this.tenant(id);
   }
 
   async archiveTenant(user: AuthUser, id: string, dto: ArchiveTenantDto) {
@@ -1842,6 +1961,42 @@ export class PlatformService {
       slug = `${base}-${suffix}`;
     }
     return slug;
+  }
+
+  private async uniquePlanSlug(input: string, existingId?: string) {
+    const base =
+      input
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '') || 'plan';
+    let slug = base;
+    let suffix = 1;
+    while (true) {
+      const existing = await this.prisma.subscriptionPlan.findUnique({
+        where: { slug },
+      });
+      if (!existing || existing.id === existingId) return slug;
+      suffix += 1;
+      slug = `${base}-${suffix}`;
+    }
+  }
+
+  private planData(dto: UpsertSubscriptionPlanDto, slug?: string) {
+    return {
+      name: dto.name?.trim(),
+      slug,
+      description: dto.description?.trim() || null,
+      active: dto.active,
+      currency: dto.currency?.trim().toUpperCase(),
+      monthlyPriceCents: dto.monthlyPriceCents,
+      setupFeeCents: dto.setupFeeCents,
+      stripePriceId: dto.stripePriceId?.trim() || null,
+      paystackPlanCode: dto.paystackPlanCode?.trim() || null,
+      featureFlags: dto.featureFlags as Prisma.InputJsonValue,
+      planLimits: dto.planLimits as Prisma.InputJsonValue,
+      sortOrder: dto.sortOrder,
+    };
   }
 
   private async createStripeSubscriptionCheckout(input: {
