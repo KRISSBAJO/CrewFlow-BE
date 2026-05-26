@@ -12,6 +12,7 @@ import { LeadStatus, UserRole } from '@prisma/client';
 import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
 import { Roles } from '../common/roles.decorator';
+import { ConvertLeadToBookingDto } from './dto/convert-lead-to-booking.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 import { LeadsService } from './leads.service';
@@ -50,5 +51,15 @@ export class LeadsController {
     @Body() dto: UpdateLeadDto,
   ) {
     return this.leads.update(user, id, dto);
+  }
+
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
+  @Post(':id/convert-to-booking')
+  convertToBooking(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: ConvertLeadToBookingDto,
+  ) {
+    return this.leads.convertToBooking(user, id, dto);
   }
 }

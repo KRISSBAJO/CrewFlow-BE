@@ -1,16 +1,19 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import {
   BookingIntentStatus,
+  BookingStatus,
   LeadSource,
   LeadStatus,
   MessageProvider,
   Prisma,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
+import { BookingsService } from '../bookings/bookings.service';
 import type { AuthUser } from '../common/current-user.decorator';
 import { assertManager } from '../common/permissions';
 import { PlanLimitsService } from '../common/plan-limits.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ConvertLeadToBookingDto } from './dto/convert-lead-to-booking.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 
@@ -44,6 +47,7 @@ export class LeadsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly planLimits: PlanLimitsService,
+    private readonly bookings: BookingsService,
   ) {}
 
   findAll(user: AuthUser, status?: LeadStatus, assignedToMe?: boolean) {
@@ -139,6 +143,88 @@ export class LeadsService {
     });
 
     return lead;
+  }
+
+  async convertToBooking(
+    user: AuthUser,
+    id: string,
+    dto: ConvertLeadToBookingDto,
+  ) {
+    assertManager(user);
+    const lead = await this.prisma.lead.findFirst({
+      where: { id, tenantId: user.tenantId },
+      include: leadInclude,
+    });
+
+    if (!lead) {
+      throw new BadRequestException('Lead not found');
+    }
+
+    if (!lead.customerId) {
+      throw new BadRequestException(
+        'Connect this lead to a customer before converting it to a booking',
+      );
+    }
+
+    if (lead.bookingId) {
+      throw new BadRequestException('Lead is already connected to a booking');
+    }
+
+    const booking = await this.bookings.create(user, {
+      customerId: lead.customerId,
+      serviceId: dto.serviceId,
+      assignedStaffId: dto.assignedStaffId,
+      startTime: dto.startTime,
+      status: dto.status ?? BookingStatus.CONFIRMED,
+      source: `lead:${lead.source.toLowerCase()}`,
+      notes:
+        dto.notes ??
+        [
+          `Converted from lead: ${lead.title}`,
+          lead.notes ? `Lead notes: ${lead.notes}` : undefined,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+    });
+
+    const updatedLead = await this.prisma.lead.update({
+      where: { id: lead.id, tenantId: user.tenantId },
+      data: {
+        status: LeadStatus.WON,
+        bookingId: booking.id,
+        conversionProbability: 100,
+        followUpAt: null,
+        wonLostReason: `Converted to booking ${booking.id}`,
+      },
+      include: leadInclude,
+    });
+
+    if (lead.bookingIntentId) {
+      await this.prisma.bookingIntent.updateMany({
+        where: { id: lead.bookingIntentId, tenantId: user.tenantId },
+        data: {
+          status: BookingIntentStatus.BOOKED,
+          bookingId: booking.id,
+        },
+      });
+    }
+
+    await this.audit.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'LEAD_CONVERTED_TO_BOOKING',
+      entityType: 'Lead',
+      entityId: lead.id,
+      summary: `Converted lead to booking for ${booking.customer.name}`,
+      metadata: {
+        leadId: lead.id,
+        bookingId: booking.id,
+        serviceId: dto.serviceId,
+        startTime: dto.startTime,
+      },
+    });
+
+    return { lead: updatedLead, booking };
   }
 
   async analytics(user: AuthUser) {
