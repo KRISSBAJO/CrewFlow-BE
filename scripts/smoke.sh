@@ -45,6 +45,54 @@ booking="$(
     -d "{\"inlineCustomer\":{\"name\":\"Smoke Test Customer\",\"phone\":\"+15550999999\",\"email\":\"smoke@example.com\"},\"serviceId\":\"$service_id\",\"startTime\":\"$start_time\",\"notes\":\"Created by scripts/smoke.sh\"}"
 )"
 echo "booking: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.id} ${j.status}`)' "$booking")"
+booking_id="$(node -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.id)' "$booking")"
+
+invoice="$(
+  curl -fsS -X POST "$API_URL/invoices/from-booking/$booking_id" \
+    -H "Authorization: Bearer $token"
+)"
+invoice_id="$(node -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.id)' "$invoice")"
+echo "invoice: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.invoiceNo} ${j.status} total=${j.totalCents}`)' "$invoice")"
+
+payment_link="$(
+  curl -fsS -X POST "$API_URL/invoices/$invoice_id/payment-link" \
+    -H "Authorization: Bearer $token" \
+    -H 'Content-Type: application/json' \
+    -d '{"provider":"MOCK"}'
+)"
+payment_id="$(node -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.payment.id)' "$payment_link")"
+echo "payment link: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.payment.provider} ${j.payment.status}`)' "$payment_link")"
+
+portal_invoice_before="$(
+  curl -fsS "$API_URL/portal/sparkle-home-services/invoices/$invoice_id"
+)"
+echo "portal invoice: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.invoice.invoiceNo} ${j.invoice.status} checkout=${Boolean(j.invoice.paymentUrl)}`)' "$portal_invoice_before")"
+
+payment_success="$(
+  curl -fsS -X POST "$API_URL/payments/mock-checkout/$payment_id/success"
+)"
+echo "payment success: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.id} ${j.status}`)' "$payment_success")"
+
+completed_job="$(
+  curl -fsS -X POST "$API_URL/field/jobs/$booking_id/complete" \
+    -H "Authorization: Bearer $token" \
+    -H 'Content-Type: application/json' \
+    -d '{"autoInvoice":false,"staffNotes":"Smoke job completed successfully.","checklist":[{"label":"Service delivered","done":true},{"label":"Customer walkthrough complete","done":true}]}'
+)"
+echo "job complete: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.booking.id} ${j.booking.status} report=${j.report.status}`)' "$completed_job")"
+
+review_message="$(
+  curl -fsS -X POST "$API_URL/communications/bookings/$booking_id/send" \
+    -H "Authorization: Bearer $token" \
+    -H 'Content-Type: application/json' \
+    -d '{"type":"REVIEW_REQUEST","provider":"SYSTEM","note":"Smoke test review follow-up."}'
+)"
+echo "review request: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.message.provider} ${j.provider.status}`)' "$review_message")"
+
+portal_booking="$(
+  curl -fsS "$API_URL/portal/sparkle-home-services/bookings/$booking_id"
+)"
+echo "portal booking: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.booking.status} next=${j.nextSteps.length}`)' "$portal_booking")"
 
 inquiry="$(
   curl -fsS -X POST "$API_URL/receptionist/inquiry" \
@@ -123,7 +171,7 @@ checkout="$(
   curl -fsS -X POST "$API_URL/platform/tenants/$tenant_id/billing/checkout" \
     -H "Authorization: Bearer $admin_token" \
     -H 'Content-Type: application/json' \
-    -d '{"collectSetupFee":false}'
+    -d '{"provider":"mock","collectSetupFee":false}'
 )"
 echo "billing checkout: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.provider} ${j.sessionId}`)' "$checkout")"
 
