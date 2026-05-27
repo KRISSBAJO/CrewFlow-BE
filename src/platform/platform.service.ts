@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import {
   ActionStatus,
@@ -81,6 +82,7 @@ export class PlatformService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly jwt: JwtService,
+    private readonly config: ConfigService,
     private readonly automations: AutomationsService,
     private readonly payments: PaymentsService,
     private readonly whatsAppWebhooks: WhatsappWebhookService,
@@ -1803,17 +1805,30 @@ export class PlatformService {
       },
     });
 
-    const accessToken = this.jwt.sign({
+    const tokenPayload = {
       sub: target.id,
       tenantId: target.tenantId,
       email: target.email,
       role: target.role,
       impersonatedBy: user.sub,
       supportAccessId: access.id,
+    };
+    const accessToken = this.jwt.sign({
+      ...tokenPayload,
+      tokenType: 'access',
+    }, {
+      expiresIn: `${Number(this.config.get<string>('JWT_ACCESS_TTL_MINUTES') ?? 15)}m`,
+    });
+    const refreshToken = this.jwt.sign({
+      ...tokenPayload,
+      tokenType: 'refresh',
+    }, {
+      expiresIn: `${Number(this.config.get<string>('JWT_REFRESH_TTL_DAYS') ?? 30)}d`,
     });
 
     return {
       accessToken,
+      refreshToken,
       user: {
         id: target.id,
         sub: target.id,

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { AuditModule } from '../audit/audit.module';
+import { AuthModule } from '../auth/auth.module';
 import { AutomationsModule } from '../automations/automations.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -13,6 +14,7 @@ import { PlatformService } from './platform.service';
 @Module({
   imports: [
     PrismaModule,
+    AuthModule,
     AuditModule,
     JwtModule.registerAsync({
       inject: [ConfigService],

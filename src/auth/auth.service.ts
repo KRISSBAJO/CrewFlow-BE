@@ -3,18 +3,31 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { AutomationTrigger, MessageProvider, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import type { Response } from 'express';
+import type { AuthUser } from '../common/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+
+type SessionUser = AuthUser & { id: string };
+type SessionPayload = {
+  accessToken?: string;
+  refreshToken?: string;
+  user: SessionUser;
+  tenant?: Record<string, unknown>;
+  onboardingProfile?: unknown;
+};
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    private readonly config: ConfigService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -146,25 +159,196 @@ export class AuthService {
     });
   }
 
-  private session(
+  async me(user: AuthUser) {
+    const found = await this.prisma.user.findFirst({
+      where: { id: user.sub, tenantId: user.tenantId, active: true },
+      include: { tenant: true },
+    });
+
+    if (!found) {
+      throw new UnauthorizedException('User is not active');
+    }
+
+    return {
+      user: this.sessionUser(found.id, found.tenantId, found.email, found.role),
+      tenant: {
+        id: found.tenant.id,
+        businessName: found.tenant.businessName,
+        slug: found.tenant.slug,
+        industry: found.tenant.industry,
+        status: found.tenant.status,
+      },
+    };
+  }
+
+  async refresh(refreshToken?: string) {
+    if (!refreshToken) {
+      throw new UnauthorizedException('Missing refresh cookie');
+    }
+
+    let payload: AuthUser & { tokenType?: string };
+    try {
+      payload = await this.jwt.verifyAsync(refreshToken, {
+        secret: this.config.getOrThrow<string>('JWT_SECRET'),
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    if (payload.tokenType !== 'refresh') {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: { id: payload.sub, tenantId: payload.tenantId, active: true },
+      include: { tenant: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User is not active');
+    }
+
+    return this.session(user.id, user.tenantId, user.email, user.role, {
+      tenant: {
+        id: user.tenant.id,
+        businessName: user.tenant.businessName,
+        slug: user.tenant.slug,
+        industry: user.tenant.industry,
+        status: user.tenant.status,
+      },
+    });
+  }
+
+  setSessionCookies(response: Response, session: SessionPayload) {
+    if (!session.accessToken || !session.refreshToken) return;
+    response.cookie(this.accessCookieName(), session.accessToken, {
+      ...this.cookieOptions(),
+      maxAge: this.accessTtlMinutes() * 60_000,
+    });
+    response.cookie(this.refreshCookieName(), session.refreshToken, {
+      ...this.cookieOptions(),
+      maxAge: this.refreshTtlDays() * 86_400_000,
+    });
+  }
+
+  clearSessionCookies(response: Response) {
+    const options = this.cookieOptions();
+    response.clearCookie(this.accessCookieName(), options);
+    response.clearCookie(this.refreshCookieName(), options);
+  }
+
+  refreshTokenFromCookieHeader(cookieHeader?: string) {
+    return this.cookieValue(cookieHeader, this.refreshCookieName());
+  }
+
+  expose(session: SessionPayload) {
+    if (this.config.get<string>('DEV_EXPOSE_TOKENS') === 'true') {
+      return session;
+    }
+    const { accessToken: _accessToken, refreshToken: _refreshToken, ...safe } =
+      session;
+    return safe;
+  }
+
+  createSession(
     id: string,
     tenantId: string,
     email: string,
     role: UserRole,
     extra: Record<string, unknown> = {},
   ) {
+    return this.session(id, tenantId, email, role, extra);
+  }
+
+  private session(
+    id: string,
+    tenantId: string,
+    email: string,
+    role: UserRole,
+    extra: Record<string, unknown> = {},
+  ): SessionPayload {
     const accessToken = this.jwt.sign({
       sub: id,
       tenantId,
       email,
       role,
+      tokenType: 'access',
+    }, {
+      expiresIn: `${this.accessTtlMinutes()}m`,
+    });
+    const refreshToken = this.jwt.sign({
+      sub: id,
+      tenantId,
+      email,
+      role,
+      tokenType: 'refresh',
+    }, {
+      expiresIn: `${this.refreshTtlDays()}d`,
     });
 
     return {
       accessToken,
-      user: { id, sub: id, tenantId, email, role },
+      refreshToken,
+      user: this.sessionUser(id, tenantId, email, role),
       ...extra,
     };
+  }
+
+  private sessionUser(
+    id: string,
+    tenantId: string,
+    email: string,
+    role: UserRole,
+  ): SessionUser {
+    return { id, sub: id, tenantId, email, role };
+  }
+
+  private accessCookieName() {
+    return (
+      this.config.get<string>('IDENTITY_ACCESS_COOKIE_NAME') ??
+      'crewflow_access'
+    );
+  }
+
+  private refreshCookieName() {
+    return (
+      this.config.get<string>('IDENTITY_REFRESH_COOKIE_NAME') ??
+      'crewflow_refresh'
+    );
+  }
+
+  private accessTtlMinutes() {
+    return Number(this.config.get<string>('JWT_ACCESS_TTL_MINUTES') ?? 15);
+  }
+
+  private refreshTtlDays() {
+    return Number(this.config.get<string>('JWT_REFRESH_TTL_DAYS') ?? 30);
+  }
+
+  private cookieOptions() {
+    const sameSite =
+      (this.config.get<string>('COOKIE_SAME_SITE') ?? 'lax').toLowerCase() ===
+      'none'
+        ? 'none'
+        : (this.config.get<string>('COOKIE_SAME_SITE') ?? 'lax').toLowerCase() ===
+            'strict'
+          ? 'strict'
+          : 'lax';
+    const domain = this.config.get<string>('COOKIE_DOMAIN') || undefined;
+    return {
+      httpOnly: true,
+      secure: this.config.get<string>('COOKIE_SECURE') === 'true',
+      sameSite: sameSite as 'lax' | 'strict' | 'none',
+      path: '/',
+      ...(domain ? { domain } : {}),
+    };
+  }
+
+  private cookieValue(cookieHeader: string | undefined, name: string) {
+    if (!cookieHeader) return undefined;
+    const cookies = cookieHeader.split(';').map((cookie) => cookie.trim());
+    const found = cookies.find((cookie) => cookie.startsWith(`${name}=`));
+    return found ? decodeURIComponent(found.slice(name.length + 1)) : undefined;
   }
 
   private normalizeServices(services?: string[]): string[] {

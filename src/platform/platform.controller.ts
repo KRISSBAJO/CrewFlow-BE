@@ -6,9 +6,12 @@ import {
   Patch,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
+import type { Response } from 'express';
+import { AuthService } from '../auth/auth.service';
 import { CurrentUser } from '../common/current-user.decorator';
 import type { AuthUser } from '../common/current-user.decorator';
 import { Public } from '../common/public.decorator';
@@ -34,7 +37,10 @@ import { PlatformService } from './platform.service';
 @Roles(UserRole.PLATFORM_ADMIN, UserRole.PLATFORM_SUPPORT)
 @Controller('platform')
 export class PlatformController {
-  constructor(private readonly platform: PlatformService) {}
+  constructor(
+    private readonly platform: PlatformService,
+    private readonly auth: AuthService,
+  ) {}
 
   @Get('metrics')
   metrics() {
@@ -228,8 +234,14 @@ export class PlatformController {
   }
 
   @Post('support-access/:token/impersonate')
-  impersonate(@CurrentUser() user: AuthUser, @Param('token') token: string) {
-    return this.platform.impersonate(user, token);
+  async impersonate(
+    @CurrentUser() user: AuthUser,
+    @Param('token') token: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const session = await this.platform.impersonate(user, token);
+    this.auth.setSessionCookies(response, session);
+    return this.auth.expose(session);
   }
 
   @Post('support-access/:id/revoke')
