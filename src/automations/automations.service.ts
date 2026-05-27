@@ -2,9 +2,14 @@ import { Injectable } from '@nestjs/common';
 import {
   AutomationRunStatus,
   AutomationTrigger,
+  BookingStatus,
+  InvoiceStatus,
+  LeadSource,
+  LeadStatus,
   MessageDirection,
   MessageProvider,
   Prisma,
+  UserRole,
   WhatsAppTemplateStatus,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
@@ -189,6 +194,249 @@ export class AutomationsService {
       metadata: { reason },
     });
     return sent;
+  }
+
+  async verifyWorkflowPack(tenantId: string, actorId: string) {
+    const fixture = await this.createWorkflowVerificationFixture(tenantId);
+    const contexts: Array<AutomationContext & { label: string }> = [
+      {
+        label: 'booking reminder',
+        tenantId,
+        trigger: AutomationTrigger.BOOKING_CONFIRMED,
+        customerId: fixture.customer.id,
+        bookingId: fixture.booking.id,
+      },
+      {
+        label: 'technician on the way',
+        tenantId,
+        trigger: AutomationTrigger.STAFF_ON_THE_WAY,
+        customerId: fixture.customer.id,
+        bookingId: fixture.booking.id,
+      },
+      {
+        label: 'invoice reminder',
+        tenantId,
+        trigger: AutomationTrigger.INVOICE_DUE,
+        customerId: fixture.customer.id,
+        invoiceId: fixture.invoice.id,
+        bookingId: fixture.booking.id,
+      },
+      {
+        label: 'review request',
+        tenantId,
+        trigger: AutomationTrigger.REVIEW_REQUEST,
+        customerId: fixture.customer.id,
+        bookingId: fixture.booking.id,
+      },
+      {
+        label: 'missed lead follow-up',
+        tenantId,
+        trigger: AutomationTrigger.LEAD_FOLLOW_UP,
+        customerId: fixture.customer.id,
+        leadId: fixture.lead.id,
+      },
+    ];
+
+    const results: Array<{
+      label: string;
+      trigger: AutomationTrigger;
+      runId?: string;
+      status: AutomationRunStatus | 'MISSING_RULE';
+      provider?: MessageProvider;
+      content?: string | null;
+      error?: string | null;
+    }> = [];
+    for (const context of contexts) {
+      const run = await this.ensureVerificationRuleAndTrigger(context);
+      const sent =
+        run?.status === AutomationRunStatus.PENDING
+          ? await this.sendRun(run.id)
+          : run;
+      results.push({
+        label: context.label,
+        trigger: context.trigger,
+        runId: sent?.id,
+        status: sent?.status ?? 'MISSING_RULE',
+        provider: sent?.provider,
+        content: sent?.content,
+        error: sent?.error,
+      });
+    }
+
+    await this.audit.record({
+      tenantId,
+      actorId,
+      action: 'WHATSAPP_WORKFLOW_PACK_VERIFIED',
+      entityType: 'AutomationRun',
+      summary: 'Verified booking, dispatch, invoice, review, and lead follow-up workflows',
+      metadata: {
+        bookingId: fixture.booking.id,
+        invoiceId: fixture.invoice.id,
+        leadId: fixture.lead.id,
+        results,
+      },
+    });
+
+    return {
+      tenantId,
+      bookingId: fixture.booking.id,
+      invoiceId: fixture.invoice.id,
+      leadId: fixture.lead.id,
+      passed: results.every((result) => result.status === AutomationRunStatus.SENT),
+      results,
+    };
+  }
+
+  private async ensureVerificationRuleAndTrigger(
+    context: AutomationContext & { label: string },
+  ) {
+    await this.prisma.automationRule.upsert({
+      where: {
+        tenantId_trigger: {
+          tenantId: context.tenantId,
+          trigger: context.trigger,
+        },
+      },
+      create: {
+        tenantId: context.tenantId,
+        trigger: context.trigger,
+        provider: MessageProvider.WHATSAPP,
+        template: this.verificationTemplate(context.trigger),
+        active: true,
+        delayMinutes: 0,
+      },
+      update: {
+        active: true,
+      },
+    });
+    return this.trigger(context);
+  }
+
+  private async createWorkflowVerificationFixture(tenantId: string) {
+    const now = Date.now();
+    const customer = await this.prisma.customer.upsert({
+      where: {
+        tenantId_phone: {
+          tenantId,
+          phone: '+15550009992',
+        },
+      },
+      create: {
+        tenantId,
+        name: 'WhatsApp Workflow Verification',
+        phone: '+15550009992',
+        email: 'whatsapp-verification@crewflow.local',
+        notes: 'Created by WhatsApp workflow verification.',
+      },
+      update: {
+        email: 'whatsapp-verification@crewflow.local',
+      },
+    });
+    const service =
+      (await this.prisma.service.findFirst({
+        where: { tenantId, active: true },
+        orderBy: { createdAt: 'asc' },
+      })) ??
+      (await this.prisma.service.create({
+        data: {
+          tenantId,
+          title: 'Workflow Verification Service',
+          durationMinutes: 90,
+          priceCents: 14900,
+          active: true,
+        },
+      }));
+    const assignedStaff = await this.prisma.user.findFirst({
+      where: {
+        tenantId,
+        active: true,
+        role: { in: [UserRole.STAFF, UserRole.MANAGER] },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const startTime = new Date(now + 2 * 86_400_000);
+    startTime.setHours(10, 0, 0, 0);
+    const booking = await this.prisma.booking.create({
+      data: {
+        tenantId,
+        customerId: customer.id,
+        serviceId: service.id,
+        assignedStaffId: assignedStaff?.id,
+        startTime,
+        status: BookingStatus.CONFIRMED,
+        source: 'workflow_verification',
+        notes: 'Created by WhatsApp workflow verification.',
+      },
+    });
+    const dueDate = new Date(now + 7 * 86_400_000);
+    const invoice = await this.prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.update({
+        where: { id: tenantId },
+        data: { invoiceCounter: { increment: 1 } },
+        select: { invoiceCounter: true },
+      });
+      return tx.invoice.create({
+        data: {
+          tenantId,
+          customerId: customer.id,
+          bookingId: booking.id,
+          invoiceNo: `INV-${tenant.invoiceCounter.toString().padStart(6, '0')}`,
+          subtotalCents: service.priceCents,
+          totalCents: service.priceCents,
+          dueDate,
+          status: InvoiceStatus.SENT,
+          paymentUrl: `https://pay.crewflow.local/verify/${booking.id}`,
+          lineItems: {
+            create: {
+              tenantId,
+              description: service.title,
+              quantity: 1,
+              unitCents: service.priceCents,
+              totalCents: service.priceCents,
+            },
+          },
+        },
+      });
+    });
+    const lead = await this.prisma.lead.create({
+      data: {
+        tenantId,
+        customerId: customer.id,
+        bookingId: booking.id,
+        assignedToId: assignedStaff?.id,
+        status: LeadStatus.CONTACTED,
+        source: LeadSource.WHATSAPP,
+        title: 'Missed lead verification follow-up',
+        estimatedValueCents: service.priceCents,
+        conversionProbability: 60,
+        followUpAt: new Date(),
+        notes: 'Created by WhatsApp workflow verification.',
+      },
+    });
+
+    return { customer, service, booking, invoice, lead };
+  }
+
+  private verificationTemplate(trigger: AutomationTrigger) {
+    const templates: Record<AutomationTrigger, string> = {
+      [AutomationTrigger.BOOKING_CONFIRMED]:
+        'Hi {{customerName}}, your {{service}} booking with {{businessName}} is confirmed for {{startTime}}.',
+      [AutomationTrigger.STAFF_ON_THE_WAY]:
+        'Hi {{customerName}}, {{staffName}} is on the way for your {{service}} appointment.',
+      [AutomationTrigger.MISSED_APPOINTMENT]:
+        'Hi {{customerName}}, we missed you for {{service}}. Reply here and we can help reschedule.',
+      [AutomationTrigger.INVOICE_DUE]:
+        'Hi {{customerName}}, invoice {{invoiceNo}} for ${{total}} is ready. Pay here: {{paymentUrl}}',
+      [AutomationTrigger.REVIEW_REQUEST]:
+        'Hi {{customerName}}, thanks for choosing {{businessName}}. Could you leave us a quick review?',
+      [AutomationTrigger.LEAD_FOLLOW_UP]:
+        'Hi {{customerName}}, checking back on your {{leadTitle}} request. Would you like us to finish booking it?',
+      [AutomationTrigger.REBOOKING_REMINDER]:
+        'Hi {{customerName}}, ready to schedule your next {{service}} with {{businessName}}?',
+      [AutomationTrigger.CUSTOMER_WINBACK]:
+        'Hi {{customerName}}, we would love to help again when you are ready.',
+    };
+    return templates[trigger];
   }
 
   private async sendRun(runId: string) {

@@ -92,6 +92,12 @@ export class AutomationsController {
   }
 
   @Roles(UserRole.OWNER, UserRole.MANAGER)
+  @Post('workflow-check')
+  verifyWorkflowPack(@CurrentUser() user: AuthUser) {
+    return this.automations.verifyWorkflowPack(user.tenantId, user.sub);
+  }
+
+  @Roles(UserRole.OWNER, UserRole.MANAGER)
   @Post('runs/:id/retry')
   retry(
     @CurrentUser() user: AuthUser,

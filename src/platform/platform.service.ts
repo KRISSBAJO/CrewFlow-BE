@@ -10,6 +10,7 @@ import {
   BillingEventType,
   LeadStatus,
   InvoiceStatus,
+  PaymentProvider,
   Prisma,
   SubscriptionStatus,
   Tenant,
@@ -39,6 +40,10 @@ import { ReplayPlatformFailureDto } from './dto/replay-platform-failure.dto';
 import { UpdatePlatformUserDto } from './dto/update-platform-user.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
 import { UpsertSubscriptionPlanDto } from './dto/upsert-subscription-plan.dto';
+import {
+  ProviderWorkflowTarget,
+  VerifyProviderWorkflowDto,
+} from './dto/verify-provider-workflow.dto';
 import { UpdateActionDto } from '../workflows/dto/update-action.dto';
 
 type StripeCheckoutSession = {
@@ -1611,6 +1616,57 @@ export class PlatformService {
     });
 
     return { provider: 'stripe', sessionId: session.id, url: session.url };
+  }
+
+  async verifyProviderWorkflows(
+    user: AuthUser,
+    id: string,
+    dto: VerifyProviderWorkflowDto,
+  ) {
+    this.assertSuperAdmin(user, 'verify payment provider workflows');
+    await this.prisma.tenant.findUniqueOrThrow({ where: { id } });
+    const providers =
+      dto.provider === ProviderWorkflowTarget.ALL || !dto.provider
+        ? [PaymentProvider.STRIPE, PaymentProvider.PAYSTACK]
+        : [
+            dto.provider as
+              | typeof PaymentProvider.STRIPE
+              | typeof PaymentProvider.PAYSTACK,
+          ];
+    const results = await Promise.all(
+      providers.map((provider) =>
+        this.payments.verifyProviderWorkflow({
+          tenantId: id,
+          provider,
+          actorId: user.sub,
+        }),
+      ),
+    );
+
+    await this.auditService.record({
+      tenantId: user.tenantId,
+      actorId: user.sub,
+      action: 'PLATFORM_PROVIDER_WORKFLOWS_VERIFIED',
+      entityType: 'Tenant',
+      entityId: id,
+      summary: `Platform admin verified ${providers.join(', ')} billing workflows`,
+      metadata: {
+        providers,
+        checks: results.map((result) => ({
+          provider: result.provider,
+          checks: result.checks,
+        })),
+      },
+    });
+
+    return {
+      tenantId: id,
+      providers,
+      passed: results.every((result) =>
+        Object.values(result.checks).every(Boolean),
+      ),
+      results,
+    };
   }
 
   async markMockBillingSucceeded(id: string) {

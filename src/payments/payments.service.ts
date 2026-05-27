@@ -44,6 +44,10 @@ type PaystackInitializeResponse = {
   };
 };
 
+type ProviderVerificationProvider =
+  | typeof PaymentProvider.STRIPE
+  | typeof PaymentProvider.PAYSTACK;
+
 @Injectable()
 export class PaymentsService {
   constructor(
@@ -466,32 +470,6 @@ export class PaymentsService {
     });
 
     try {
-      const tenantId =
-        this.stringField(metadata, 'tenantId') ??
-        (await this.resolvePlatformTenantFromPaystackObject(data));
-      if (
-        tenantId &&
-        (eventType === 'charge.success' ||
-          eventType === 'subscription.create' ||
-          eventType === 'invoice.payment_success')
-      ) {
-        await this.completePaystackPlatformEvent({
-          tenantId,
-          providerEventId: `${eventType}:${reference}`,
-          eventType,
-          data,
-          metadata,
-        });
-        return this.prisma.webhookEvent.update({
-          where: { id: event.id },
-          data: {
-            tenantId,
-            status: WebhookEventStatus.PROCESSED,
-            processedAt: new Date(),
-          },
-        });
-      }
-
       const paymentId = this.stringField(metadata, 'paymentId');
       const payment = paymentId
         ? await this.prisma.payment.findUnique({ where: { id: paymentId } })
@@ -511,6 +489,34 @@ export class PaymentsService {
           where: { id: event.id },
           data: {
             tenantId: completed.tenantId,
+            status: WebhookEventStatus.PROCESSED,
+            processedAt: new Date(),
+          },
+        });
+      }
+
+      const tenantId =
+        this.stringField(metadata, 'tenantId') ??
+        (await this.resolvePlatformTenantFromPaystackObject(data));
+      if (
+        tenantId &&
+        (this.stringField(metadata, 'kind') === 'platform_subscription' ||
+          eventType !== 'charge.success') &&
+        (eventType === 'charge.success' ||
+          eventType === 'subscription.create' ||
+          eventType === 'invoice.payment_success')
+      ) {
+        await this.completePaystackPlatformEvent({
+          tenantId,
+          providerEventId: `${eventType}:${reference}`,
+          eventType,
+          data,
+          metadata,
+        });
+        return this.prisma.webhookEvent.update({
+          where: { id: event.id },
+          data: {
+            tenantId,
             status: WebhookEventStatus.PROCESSED,
             processedAt: new Date(),
           },
@@ -559,6 +565,286 @@ export class PaymentsService {
     return event.provider === WebhookProvider.STRIPE
       ? this.reprocessStripeWebhookEvent(event.id, event.payload)
       : this.reprocessPaystackWebhookEvent(event.id, event.payload);
+  }
+
+  async verifyProviderWorkflow(input: {
+    tenantId: string;
+    provider: ProviderVerificationProvider;
+    actorId?: string;
+  }) {
+    const tenant = await this.prisma.tenant.findUniqueOrThrow({
+      where: { id: input.tenantId },
+    });
+    const customer = await this.upsertVerificationCustomer(input.tenantId);
+    const invoice = await this.createVerificationInvoice(
+      input.tenantId,
+      customer.id,
+      input.provider,
+    );
+    const paymentSessionId = `verify_${input.provider.toLowerCase()}_${invoice.id}`;
+    const payment = await this.prisma.payment.create({
+      data: {
+        tenantId: input.tenantId,
+        invoiceId: invoice.id,
+        provider: input.provider,
+        status: PaymentStatus.PENDING,
+        amountCents: invoice.totalCents,
+        currency:
+          input.provider === PaymentProvider.PAYSTACK
+            ? (process.env.PAYSTACK_CURRENCY ?? 'NGN').toLowerCase()
+            : 'usd',
+        checkoutUrl: `https://verify.crewflow.local/${paymentSessionId}`,
+        providerSessionId: paymentSessionId,
+        providerPaymentId: paymentSessionId,
+        metadata: {
+          verification: true,
+          provider: input.provider,
+          actorId: input.actorId,
+        },
+      },
+    });
+
+    const invoiceWebhook =
+      input.provider === PaymentProvider.STRIPE
+        ? await this.handleSignedStripeWebhook({
+            id: `evt_verify_invoice_${payment.id}`,
+            type: 'checkout.session.completed',
+            data: {
+              object: {
+                id: paymentSessionId,
+                payment_intent: `pi_verify_${payment.id}`,
+                metadata: {
+                  paymentId: payment.id,
+                  invoiceId: invoice.id,
+                  tenantId: input.tenantId,
+                },
+              },
+            },
+          })
+        : await this.handleSignedPaystackWebhook({
+            event: 'charge.success',
+            data: {
+              reference: paymentSessionId,
+              amount: invoice.totalCents,
+              customer: { email: customer.email, customer_code: null },
+              metadata: {
+                paymentId: payment.id,
+                invoiceId: invoice.id,
+                tenantId: input.tenantId,
+              },
+            },
+          });
+
+    const subscriptionEventId = `verify_subscription_${input.provider.toLowerCase()}_${Date.now()}`;
+    const subscriptionWebhook =
+      input.provider === PaymentProvider.STRIPE
+        ? await this.handleSignedStripeWebhook({
+            id: `evt_${subscriptionEventId}`,
+            type: 'checkout.session.completed',
+            data: {
+              object: {
+                id: `cs_${subscriptionEventId}`,
+                customer:
+                  tenant.stripeCustomerId ?? `cus_verify_${input.tenantId}`,
+                subscription:
+                  tenant.stripeSubscriptionId ?? `sub_verify_${input.tenantId}`,
+                amount_subtotal: tenant.monthlyPriceCents ?? 29900,
+                metadata: {
+                  kind: 'platform_subscription',
+                  tenantId: input.tenantId,
+                  monthlyPriceCents: String(tenant.monthlyPriceCents ?? 29900),
+                  setupFeeCents: String(tenant.setupFeeCents ?? 0),
+                },
+              },
+            },
+          })
+        : await this.handleSignedPaystackWebhook({
+            event: 'charge.success',
+            data: {
+              reference: subscriptionEventId,
+              amount: tenant.monthlyPriceCents ?? 29900,
+              customer: {
+                email: tenant.billingEmail,
+                customer_code:
+                  tenant.paystackCustomerCode ?? `CUS_verify_${input.tenantId}`,
+              },
+              subscription: {
+                subscription_code:
+                  tenant.paystackSubscriptionCode ??
+                  `SUB_verify_${input.tenantId}`,
+              },
+              metadata: {
+                kind: 'platform_subscription',
+                tenantId: input.tenantId,
+                monthlyPriceCents: String(tenant.monthlyPriceCents ?? 29900),
+                setupFeeCents: String(tenant.setupFeeCents ?? 0),
+              },
+            },
+          });
+
+    const [updatedInvoice, updatedPayment, updatedTenant, billingEvents] =
+      await Promise.all([
+        this.prisma.invoice.findUniqueOrThrow({
+          where: { id: invoice.id },
+          include: { payments: true },
+        }),
+        this.prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }),
+        this.prisma.tenant.findUniqueOrThrow({
+          where: { id: input.tenantId },
+        }),
+        this.prisma.platformBillingEvent.findMany({
+          where: { tenantId: input.tenantId },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+        }),
+      ]);
+
+    await this.audit.record({
+      tenantId: input.tenantId,
+      actorId: input.actorId,
+      action: 'PROVIDER_PAYMENT_WORKFLOW_VERIFIED',
+      entityType: 'Tenant',
+      entityId: input.tenantId,
+      summary: `Verified ${input.provider} invoice and subscription webhook workflow`,
+      metadata: {
+        invoiceId: invoice.id,
+        paymentId: payment.id,
+        invoiceWebhookId: invoiceWebhook.id,
+        subscriptionWebhookId: subscriptionWebhook.id,
+      },
+    });
+
+    return {
+      provider: input.provider,
+      invoice: {
+        id: updatedInvoice.id,
+        invoiceNo: updatedInvoice.invoiceNo,
+        status: updatedInvoice.status,
+        paidAt: updatedInvoice.paidAt,
+        paymentReference: updatedInvoice.paymentReference,
+      },
+      payment: {
+        id: updatedPayment.id,
+        status: updatedPayment.status,
+        providerSessionId: updatedPayment.providerSessionId,
+        providerPaymentId: updatedPayment.providerPaymentId,
+      },
+      tenant: {
+        id: updatedTenant.id,
+        status: updatedTenant.status,
+        subscriptionStatus: updatedTenant.subscriptionStatus,
+        stripeCustomerId: updatedTenant.stripeCustomerId,
+        stripeSubscriptionId: updatedTenant.stripeSubscriptionId,
+        paystackCustomerCode: updatedTenant.paystackCustomerCode,
+        paystackSubscriptionCode: updatedTenant.paystackSubscriptionCode,
+        currentPeriodEnd: updatedTenant.currentPeriodEnd,
+        nextBillingAt: updatedTenant.nextBillingAt,
+      },
+      webhooks: {
+        invoice: {
+          id: invoiceWebhook.id,
+          status: invoiceWebhook.status,
+          error: invoiceWebhook.error,
+        },
+        subscription: {
+          id: subscriptionWebhook.id,
+          status: subscriptionWebhook.status,
+          error: subscriptionWebhook.error,
+        },
+      },
+      billingEvents,
+      checks: {
+        invoicePaid: updatedInvoice.status === InvoiceStatus.PAID,
+        paymentSucceeded: updatedPayment.status === PaymentStatus.SUCCEEDED,
+        subscriptionActive:
+          updatedTenant.subscriptionStatus === SubscriptionStatus.ACTIVE,
+        billingHistoryWritten: billingEvents.some(
+          (event) =>
+            event.type === BillingEventType.SUBSCRIPTION_STARTED ||
+            event.type === BillingEventType.SUBSCRIPTION_RENEWED,
+        ),
+      },
+    };
+  }
+
+  private async upsertVerificationCustomer(tenantId: string) {
+    return this.prisma.customer.upsert({
+      where: {
+        tenantId_phone: {
+          tenantId,
+          phone: '+15550009991',
+        },
+      },
+      create: {
+        tenantId,
+        name: 'Payment Workflow Verification',
+        phone: '+15550009991',
+        email: 'payments-verification@crewflow.local',
+        notes: 'Created by provider payment workflow verification.',
+      },
+      update: {
+        email: 'payments-verification@crewflow.local',
+      },
+    });
+  }
+
+  private async createVerificationInvoice(
+    tenantId: string,
+    customerId: string,
+    provider: ProviderVerificationProvider,
+  ) {
+    const dueDate = new Date();
+    dueDate.setDate(dueDate.getDate() + 7);
+    return this.prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.update({
+        where: { id: tenantId },
+        data: { invoiceCounter: { increment: 1 } },
+        select: { invoiceCounter: true },
+      });
+      return tx.invoice.create({
+        data: {
+          tenantId,
+          customerId,
+          invoiceNo: `INV-${tenant.invoiceCounter.toString().padStart(6, '0')}`,
+          subtotalCents: 9900,
+          taxCents: 0,
+          totalCents: 9900,
+          dueDate,
+          status: InvoiceStatus.SENT,
+          paymentProvider: provider,
+          lineItems: {
+            create: {
+              tenantId,
+              description: `${provider} payment workflow verification`,
+              quantity: 1,
+              unitCents: 9900,
+              totalCents: 9900,
+            },
+          },
+        },
+      });
+    });
+  }
+
+  private handleSignedStripeWebhook(payload: Record<string, unknown>) {
+    const rawBody = JSON.stringify(payload);
+    const secret = this.config.get<string>('STRIPE_WEBHOOK_SECRET');
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = secret
+      ? `t=${timestamp},v1=${createHmac('sha256', secret)
+          .update(`${timestamp}.${rawBody}`)
+          .digest('hex')}`
+      : undefined;
+    return this.handleStripeWebhook(payload, signature, rawBody);
+  }
+
+  private handleSignedPaystackWebhook(payload: Record<string, unknown>) {
+    const rawBody = JSON.stringify(payload);
+    const secret = this.config.get<string>('PAYSTACK_SECRET_KEY');
+    const signature = secret
+      ? createHmac('sha512', secret).update(rawBody).digest('hex')
+      : undefined;
+    return this.handlePaystackWebhook(payload, signature, rawBody);
   }
 
   private async reprocessStripeWebhookEvent(eventId: string, payload: unknown) {
@@ -715,32 +1001,6 @@ export class PaymentsService {
     const providerEventId = `${eventType}:${reference}`;
 
     try {
-      const tenantId =
-        this.stringField(metadata, 'tenantId') ??
-        (await this.resolvePlatformTenantFromPaystackObject(data));
-      if (
-        tenantId &&
-        (eventType === 'charge.success' ||
-          eventType === 'subscription.create' ||
-          eventType === 'invoice.payment_success')
-      ) {
-        await this.completePaystackPlatformEvent({
-          tenantId,
-          providerEventId,
-          eventType,
-          data,
-          metadata,
-        });
-        return this.prisma.webhookEvent.update({
-          where: { id: eventId },
-          data: {
-            tenantId,
-            status: WebhookEventStatus.PROCESSED,
-            processedAt: new Date(),
-          },
-        });
-      }
-
       const paymentId = this.stringField(metadata, 'paymentId');
       const payment = paymentId
         ? await this.prisma.payment.findUnique({ where: { id: paymentId } })
@@ -760,6 +1020,34 @@ export class PaymentsService {
           where: { id: eventId },
           data: {
             tenantId: completed.tenantId,
+            status: WebhookEventStatus.PROCESSED,
+            processedAt: new Date(),
+          },
+        });
+      }
+
+      const tenantId =
+        this.stringField(metadata, 'tenantId') ??
+        (await this.resolvePlatformTenantFromPaystackObject(data));
+      if (
+        tenantId &&
+        (this.stringField(metadata, 'kind') === 'platform_subscription' ||
+          eventType !== 'charge.success') &&
+        (eventType === 'charge.success' ||
+          eventType === 'subscription.create' ||
+          eventType === 'invoice.payment_success')
+      ) {
+        await this.completePaystackPlatformEvent({
+          tenantId,
+          providerEventId,
+          eventType,
+          data,
+          metadata,
+        });
+        return this.prisma.webhookEvent.update({
+          where: { id: eventId },
+          data: {
+            tenantId,
             status: WebhookEventStatus.PROCESSED,
             processedAt: new Date(),
           },

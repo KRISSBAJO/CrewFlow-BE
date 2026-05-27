@@ -26,6 +26,7 @@ import { UpdateActionDto } from '../workflows/dto/update-action.dto';
 import { UpdatePlatformUserDto } from './dto/update-platform-user.dto';
 import { UpdateTenantStatusDto } from './dto/update-tenant-status.dto';
 import { UpsertSubscriptionPlanDto } from './dto/upsert-subscription-plan.dto';
+import { VerifyProviderWorkflowDto } from './dto/verify-provider-workflow.dto';
 import { PlatformService } from './platform.service';
 
 @ApiTags('platform')
@@ -267,6 +268,15 @@ export class PlatformController {
   @Post('tenants/:id/billing/portal')
   createBillingPortal(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.platform.createBillingPortal(user, id);
+  }
+
+  @Post('tenants/:id/billing/verify-provider-workflows')
+  verifyProviderWorkflows(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: VerifyProviderWorkflowDto,
+  ) {
+    return this.platform.verifyProviderWorkflows(user, id, dto);
   }
 
   @Public()

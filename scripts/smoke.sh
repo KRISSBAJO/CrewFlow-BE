@@ -108,6 +108,12 @@ whatsapp="$(
 )"
 echo "whatsapp: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.provider.mode} ready=${j.provider.ready}`)' "$whatsapp")"
 
+workflow_check="$(
+  curl -fsS -X POST "$API_URL/automations/workflow-check" \
+    -H "Authorization: Bearer $token"
+)"
+echo "workflow check: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`passed=${j.passed} runs=${j.results.length}`)' "$workflow_check")"
+
 tenant_billing="$(
   curl -fsS "$API_URL/tenant/billing" \
     -H "Authorization: Bearer $token"
@@ -174,5 +180,13 @@ checkout="$(
     -d '{"provider":"mock","collectSetupFee":false}'
 )"
 echo "billing checkout: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`${j.provider} ${j.sessionId}`)' "$checkout")"
+
+provider_workflows="$(
+  curl -fsS -X POST "$API_URL/platform/tenants/$tenant_id/billing/verify-provider-workflows" \
+    -H "Authorization: Bearer $admin_token" \
+    -H 'Content-Type: application/json' \
+    -d '{"provider":"ALL"}'
+)"
+echo "provider workflows: $(node -e 'const j=JSON.parse(process.argv[1]); console.log(`passed=${j.passed} providers=${j.providers.join("|")}`)' "$provider_workflows")"
 
 echo "smoke: passed"
